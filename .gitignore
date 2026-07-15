@@ -66,9 +66,8 @@ gatekeeper
 # opencode internal state
 .omo/
 
-# xmake build system
+# xmake build artifacts
 .xmake/
-xmake.lua
 
 # debug information files
 *.dwo
