@@ -2,6 +2,7 @@
   "ports": [
     {
       "name": "web",
+      "enabled": true,
       "listen": ":3000",
       "backend": ":3001",
       "command": "./real-app --port 3001",
@@ -10,6 +11,7 @@
     },
     {
       "name": "api",
+      "enabled": false,
       "listen": ":4000",
       "backend": ":4001",
       "command": "./api-server --port 4001",

@@ -6,6 +6,50 @@
 
 ## 编译
 
+### 方式一：xmake（推荐，支持跨平台/跨架构）
+
+```bash
+# 安装 xmake（如未安装）
+# curl -fsSL https://xmake.io/install.sh | bash
+
+# 默认编译（当前平台）
+xmake
+
+# 输出文件位于 build/<平台>/<架构>/gatekeeper
+# 也可直接复制到项目根目录
+cp build/$(xmake show-config 2>/dev/null | awk '{print $2" "$4}' | tr ' ' '/')/gatekeeper .
+
+# --- 交叉编译示例 ---
+
+# Linux ARM64 (如树莓派)
+xmake f -p linux -a arm64
+xmake
+
+# Linux x86 32位
+xmake f -p linux -a i386
+xmake
+
+# Linux RISC-V 64
+xmake f -p linux -a riscv64
+xmake
+
+# macOS (Intel)
+xmake f -p macosx -a x86_64
+xmake
+
+# macOS (Apple Silicon)
+xmake f -p macosx -a arm64
+xmake
+
+# 清理
+xmake clean
+xmake f -c   # 清除配置缓存
+```
+
+> 更换平台/架构后，先执行 `xmake f -c` 清理缓存再重新配置编译。
+
+### 方式二：g++ 直接编译
+
 ```bash
 g++ -std=c++11 -O2 -o gatekeeper gatekeeper.cpp -lpthread
 strip gatekeeper  # 可选，减小体积
@@ -43,6 +87,7 @@ strip gatekeeper  # 可选，减小体积
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `name` | `listen` 值 | 端口名称，用于日志标识 |
+| `enabled` | `true` | 是否启用此端口，设为 `false` 可临时关闭而不删除配置 |
 | `listen` | - | 门卫监听地址（客户端连接到这里） |
 | `backend` | - | 后端程序监听地址（门卫代理到此处） |
 | `command` | - | 启动后端程序的 shell 命令 |

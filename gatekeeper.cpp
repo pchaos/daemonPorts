@@ -153,10 +153,11 @@ static JsonValue parse_json(const std::string& in) {
 
 struct PortConfig {
     std::string name;
-    std::string listenAddr;   // 门卫监听地址，如 ":3000"
-    std::string backendAddr;  // 后端监听地址，如 ":3001"
-    std::string command;      // 启动后端的命令
-    int         delayMs = 500; // 等待后端就绪的超时(ms)
+    bool        enabled = true;   // 是否启用此端口
+    std::string listenAddr;       // 门卫监听地址，如 ":3000"
+    std::string backendAddr;      // 后端监听地址，如 ":3001"
+    std::string command;          // 启动后端的命令
+    int         delayMs = 500;    // 等待后端就绪的超时(ms)
     bool        autoRestart = false; // 后端退出后自动重启
 };
 
@@ -187,6 +188,12 @@ static std::vector<PortConfig> loadConfig(const std::string& path) {
 
         PortConfig cfg;
         cfg.name = entry->get("name") ? entry->get("name")->as_str() : "";
+        if (auto* e = entry->get("enabled")) cfg.enabled = e->as_bool();
+        if (!cfg.enabled) {
+            std::string label = cfg.name.empty() ? l->as_str() : cfg.name;
+            std::cout << "  " << label << " 已禁用，跳过\n";
+            continue;
+        }
         cfg.listenAddr = l->as_str();
         cfg.backendAddr = b->as_str();
         cfg.command = c->as_str();
