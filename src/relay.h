@@ -7,6 +7,9 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+#include <vector>
+#include <chrono>
+#include <pthread.h>
 
 class PortRelay {
     std::string name_;
@@ -16,18 +19,63 @@ class PortRelay {
     int refreshSeconds_;
     bool autoRestart_;
 
+    // 混合模式字段
+    std::string mode_;
+    bool holdPort_;
+    std::vector<ProtocolConfig> protocols_;
+
     int listenFd_ = -1;
     pid_t backendPid_ = 0;
+    int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
-    std::thread listenThread_;
-    std::thread monitorThread_;
+    pthread_t listenThread_ = 0;
+    pthread_t monitorThread_ = 0;
 
+    // hold_port=true 时：每个协议的后端状态
+    struct BackendState {
+        std::string type;
+        std::string command;
+        std::string proxyTo;
+        int delayMs = 5000;
+
+        pid_t pid = 0;
+        // 用 unique_ptr 包装 atomic，使 struct 可 move（vector 要求）
+        std::unique_ptr<std::atomic<bool>> ready{new std::atomic<bool>(false)};
+        std::unique_ptr<std::atomic<bool>> stopping{new std::atomic<bool>(false)};
+
+        BackendState() = default;
+        BackendState(BackendState&&) = default;
+        BackendState& operator=(BackendState&&) = default;
+        BackendState(const BackendState&) = delete;
+        BackendState& operator=(const BackendState&) = delete;
+    };
+    std::vector<BackendState> backends_;
+    pthread_t proxyMonitorThread_ = 0;
+
+    // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
+    void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
+
+    // 通用的
     int createListener();
     pid_t launchBackend();
     bool waitForBackend(int ms);
     void sendStartupPage(int fd);
-    void listenLoop();
     void monitorBackend();
+
+    // simple 模式
+    void listenLoop();
+
+    // mixed 模式
+    void mixedListenLoop();
+    std::string detectProtocol(int fd);
+    void sendMixedResponse(int fd, const std::string& proto);
+
+    // hold_port=true 代理模式
+    int  connectToBackend(const std::string& addr);
+    void proxyConnection(int clientFd, const std::string& proxyTo);
+    void launchProtocolBackend(BackendState& bs);
+    BackendState* findBackend(const std::string& type);
+    void proxyMonitorLoop();
 
 public:
     PortRelay(const PortConfig& cfg);
