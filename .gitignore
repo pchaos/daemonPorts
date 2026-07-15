@@ -61,6 +61,9 @@ compile_commands.json
 # vcpkg
 vcpkg_installed/
 
+# gatekeeper binary
+gatekeeper
+
 # debug information files
 *.dwo
 
