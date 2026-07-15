@@ -63,6 +63,13 @@ vcpkg_installed/
 # gatekeeper binary
 gatekeeper
 
+# opencode internal state
+.omo/
+
+# xmake build system
+.xmake/
+xmake.lua
+
 # debug information files
 *.dwo
 
