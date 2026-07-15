@@ -55,7 +55,7 @@ target("gatekeeper")
 target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
-    add_files("test/test_gatekeeper.cpp")
+    add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp")
     add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp")
     add_includedirs("test", "src")
 
