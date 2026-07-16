@@ -1,10 +1,13 @@
 #include "config.h"
 #include "relay.h"
+#include "tcp_monitor.h"
 
 #include <iostream>
 #include <memory>
+#include <netinet/tcp.h>
 #include <vector>
 #include <atomic>
+#include <thread>
 #include <signal.h>
 #include <unistd.h>
 #include <sstream>
@@ -23,6 +26,46 @@ static std::atomic<bool> g_stop{false};
 static void handleSignal(int) {
     g_stop.store(true);
     for (auto& r : g_relays) r->stop();
+}
+
+// 统一 TCP 连接监控线程：轮询所有端口的连接状态并更新活跃时间戳
+static void monitorLoop() {
+    // 找出最小的轮询间隔（秒）
+    int interval = 60;
+    for (auto& r : g_relays) {
+        if (r->monitorEnabled()) {
+            interval = std::min(interval, r->monitorIntervalSec());
+        }
+    }
+
+    std::cout << "TCP 连接监控已启动，轮询间隔 " << interval << " 秒" << std::endl;
+
+    while (!g_stop.load()) {
+        for (auto& r : g_relays) {
+            if (!r->monitorEnabled()) continue;
+            int port = r->monitorPort();
+            if (port <= 0) continue;
+
+            TcpSnapshot cur = queryPortConnections(port);
+            int nonListen = 0;
+            for (auto& e : cur.entries) {
+                if (e.state != TCP_LISTEN) nonListen++;
+            }
+            bool active = nonListen > 0;
+            r->updateActivity(active);
+
+            std::cout << "  [" << r->name() << "] ACTIVE=" << (active ? "1" : "0")
+                      << "  connections=" << cur.entries.size()
+                      << "  non-listen=" << nonListen
+                      << (active ? "" : " (idle)")
+                      << std::endl;
+        }
+
+        // 逐秒等待，可响应 g_stop
+        for (int i = 0; i < interval && !g_stop.load(); i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -50,11 +93,19 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, handleSignal);
 
     std::cout << "门卫程序启动，管理 " << cfgs.size() << " 个端口:" << std::endl;
+    bool anyMonitor = false;
     for (auto& c : cfgs) {
         std::cout << "  " << c.listenAddr << " -> \"" << c.command << "\"" << std::endl;
+        if (c.monitor.enabled) anyMonitor = true;
         auto relay = std::unique_ptr<PortRelay>(new PortRelay(c));
         relay->start();
         g_relays.push_back(std::move(relay));
+    }
+
+    // 启动统一 TCP 监控线程（如果有启用监控的端口）
+    std::thread monitorThread;
+    if (anyMonitor) {
+        monitorThread = std::thread(monitorLoop);
     }
 
     // 通知 systemd 启动完成
@@ -65,5 +116,6 @@ int main(int argc, char* argv[]) {
     pause();
 
     std::cout << "门卫程序退出" << std::endl;
+    if (monitorThread.joinable()) monitorThread.join();
     return 0;
 }

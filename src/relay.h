@@ -2,7 +2,6 @@
 #define GATEKEEPER_RELAY_H
 
 #include "config.h"
-#include "tcp_monitor.h"
 
 #include <string>
 #include <atomic>
@@ -57,12 +56,10 @@ class PortRelay {
     std::vector<BackendState> backends_;
     pthread_t proxyMonitorThread_ = 0;
 
-    // TCP 连接监控
-    int tcpMonitorInterval_ = 0;   // 0=禁用, >0=采样间隔(秒)
-    pthread_t tcpMonitorThread_ = 0;
-    void tcpMonitorLoop();
+    // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
+    int tcpMonitorInterval_ = 0;
 
-    // 活跃状态跟踪
+    // 活跃状态跟踪（由统一监控线程更新）
     time_t lastActiveTime_ = 0;
 
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
@@ -103,8 +100,11 @@ public:
     // 查询端口在最近 minutes 分钟内是否有过活跃连接
     bool hasRecentActivity(int minutes) const;
 
-    // startMonitorThread 需要访问私有成员
-    friend void startMonitorThread(PortRelay*);
+    // 供统一监控线程调用
+    bool monitorEnabled() const { return tcpMonitorInterval_ > 0; }
+    int  monitorIntervalSec() const { return tcpMonitorInterval_; }
+    int  monitorPort() const;
+    void updateActivity(bool active);
 };
 
 #endif // GATEKEEPER_RELAY_H

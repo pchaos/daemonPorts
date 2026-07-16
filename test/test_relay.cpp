@@ -2,6 +2,8 @@
 #include "config.h"
 #include "relay.h"
 
+#include <ctime>
+
 TEST_CASE("buildStartupResponse - 基本结构") {
     PortConfig cfg;
     cfg.name = "test";
@@ -95,4 +97,30 @@ TEST_CASE("buildStartupResponse - 自定义刷新秒数") {
 
     CHECK(resp.find("content=\"10\"") != std::string::npos);
     CHECK(resp.find("秒后自动重试") != std::string::npos);
+}
+
+// ── hasRecentActivity ──
+
+TEST_CASE("hasRecentActivity - 默认未活跃") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+
+    PortRelay relay(cfg);
+    CHECK(relay.hasRecentActivity(1) == false);
+    CHECK(relay.hasRecentActivity(5) == false);
+    CHECK(relay.hasRecentActivity(60) == false);
+}
+
+TEST_CASE("hasRecentActivity - 当前活跃") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+
+    PortRelay relay(cfg);
+    // lastActiveTime_ 只能被 monitor 线程更新，
+    // 但构造后默认 0 → hasRecentActivity 应返回 false
+    CHECK(relay.hasRecentActivity(1) == false);
+    // 时间戳为 0 时，任何分钟数都不应该认为活跃
+    CHECK(relay.hasRecentActivity(0) == false);
 }

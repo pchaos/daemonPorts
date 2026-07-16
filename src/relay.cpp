@@ -122,9 +122,6 @@ std::string PortRelay::buildStartupResponse() const {
         + html;
 }
 
-// 前向声明
-void startMonitorThread(PortRelay* relay);
-
 void PortRelay::listenLoop() {
     while (!stop_.load()) {
         listenFd_ = createListener();
@@ -156,11 +153,6 @@ void PortRelay::listenLoop() {
 
             sendStartupPage(fd);
             close(fd);
-
-            // 首次连接触发监控
-            if (tcpMonitorInterval_ > 0 && tcpMonitorThread_ == 0) {
-                startMonitorThread(this);
-            }
 
             if (backendPid_ == 0) {
                 pid_t pid = launchBackend();
@@ -197,136 +189,22 @@ void PortRelay::listenLoop() {
     }
 }
 
-// ── TCP 连接监控 ──
-// 从 listenAddr_ 提取端口号
-static int parsePort(const std::string& addr) {
-    auto c = addr.find(':');
-    if (c == std::string::npos) return -1;
-    int port = std::stoi(addr.substr(c+1));
-    if (port <= 0 || port > 65535) return -1;
-    return port;
-}
-
-// 判断两条连接是否相同（四元组：srcAddr:srcPort ↔ dstAddr:dstPort）
-static bool connEqual(const TcpConnEntry& a, const TcpConnEntry& b) {
-    return a.srcPort == b.srcPort && a.dstPort == b.dstPort
-        && std::memcmp(&a.srcAddr, &b.srcAddr, sizeof(a.srcAddr)) == 0
-        && std::memcmp(&a.dstAddr, &b.dstAddr, sizeof(a.dstAddr)) == 0;
-}
-
-void PortRelay::tcpMonitorLoop() {
-    int port = parsePort(listenAddr_);
-    if (port <= 0) {
-        std::cerr << "  [" << name_ << "] 监控: 无法解析端口" << std::endl;
-        return;
-    }
-
-    std::cout << "  [" << name_ << "] 监控已启动（端口 " << port
-              << "，间隔 " << tcpMonitorInterval_ << " 秒）" << std::endl;
-
-    TcpSnapshot prev;
-    bool first = true;
-
-    while (!stop_.load()) {
-        // 等待间隔
-        for (int i = 0; i < tcpMonitorInterval_ && !stop_.load(); i++) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-        if (stop_.load()) break;
-
-        // 查询当前连接
-        TcpSnapshot cur = queryPortConnections(port);
-
-        // ── 活跃判断 ──
-        // 活跃 = 存在非 LISTEN 的连接（ESTABLISHED、TIME_WAIT 等）
-        int nonListenCount = 0;
-        for (auto& e : cur.entries) {
-            if (e.state != TCP_LISTEN) nonListenCount++;
-        }
-
-        bool active = nonListenCount > 0;
-        if (active) lastActiveTime_ = time(nullptr);
-
-        std::cout << "  [" << name_ << "] ACTIVE=" << (active ? "1" : "0")
-                  << "  connections=" << cur.entries.size()
-                  << "  non-listen=" << nonListenCount
-                  << (active ? "" : " (idle)")
-                  << std::endl;
-
-        if (cur.entries.empty() && !first) {
-            std::cout << "  [" << name_ << "] 监控: 无连接（端口空闲）" << std::endl;
-            prev = cur;
-            continue;
-        }
-
-        if (first) {
-            // 首次采样：标记基准
-            std::cout << "  [" << name_ << "] 监控: 初始采样 (" << cur.entries.size()
-                      << " 条连接, " << cur.elapsedUs << "μs)" << std::endl;
-            for (size_t i = 0; i < cur.entries.size(); i++) {
-                auto& e = cur.entries[i];
-                auto local = fmtAddrPort(e.srcAddr, e.srcPort);
-                auto remote = fmtAddrPort(e.dstAddr, e.dstPort);
-                std::cout << "    [BASE] " << tcpStateStr(e.state)
-                          << "  " << local << " → " << remote
-                          << "  (重传=" << e.retrans << ")" << std::endl;
-            }
-            first = false;
-            prev = cur;
-            continue;
-        }
-
-        // 非首次 → 做 diff
-        std::cout << "  [" << name_ << "] 监控: 采样 (" << cur.entries.size()
-                  << " 条连接, " << cur.elapsedUs << "μs)" << std::endl;
-
-        for (size_t i = 0; i < cur.entries.size(); i++) {
-            auto& e = cur.entries[i];
-            auto local = fmtAddrPort(e.srcAddr, e.srcPort);
-            auto remote = fmtAddrPort(e.dstAddr, e.dstPort);
-
-            // 检查是否 NEW
-            bool isNew = true;
-            for (auto& p : prev.entries) {
-                if (connEqual(e, p)) { isNew = false; break; }
-            }
-
-            std::cout << "    " << (isNew ? "[NEW] " : "      ")
-                      << tcpStateStr(e.state)
-                      << "  " << local << " → " << remote
-                      << "  (重传=" << e.retrans << ")" << std::endl;
-        }
-
-        // 标记 GONE 的连接
-        for (auto& p : prev.entries) {
-            bool found = false;
-            for (auto& e : cur.entries) {
-                if (connEqual(p, e)) { found = true; break; }
-            }
-            if (!found) {
-                auto local = fmtAddrPort(p.srcAddr, p.srcPort);
-                auto remote = fmtAddrPort(p.dstAddr, p.dstPort);
-                std::cout << "    [GONE] " << tcpStateStr(p.state)
-                          << "  " << local << " → " << remote << std::endl;
-            }
-        }
-
-        prev = cur;
-    }
-}
-
-// 启动监控线程（首次 accept 后调用）
-void startMonitorThread(PortRelay* relay) {
-    relay->createThread(relay->tcpMonitorThread_, [](void* arg) -> void* {
-        static_cast<PortRelay*>(arg)->tcpMonitorLoop();
-        return nullptr;
-    }, relay);
-}
-
 bool PortRelay::hasRecentActivity(int minutes) const {
     if (lastActiveTime_ == 0) return false;
     time_t cutoff = time(nullptr) - minutes * 60;
     return lastActiveTime_ >= cutoff;
+}
+
+void PortRelay::updateActivity(bool active) {
+    if (active) lastActiveTime_ = time(nullptr);
+}
+
+int PortRelay::monitorPort() const {
+    auto c = listenAddr_.find(':');
+    if (c == std::string::npos) return -1;
+    int port = std::stoi(listenAddr_.substr(c+1));
+    if (port <= 0 || port > 65535) return -1;
+    return port;
 }
 
 void PortRelay::monitorBackend() {
@@ -598,11 +476,6 @@ void PortRelay::mixedListenLoop() {
             }
             std::cout << "  [" << name_ << "] 检测到 " << proto << " 连接" << std::endl;
 
-            // 首次连接触发监控（hold_port=true 和 false 都适用）
-            if (tcpMonitorInterval_ > 0 && tcpMonitorThread_ == 0) {
-                startMonitorThread(this);
-            }
-
             if (holdPort_) {
                 // ── hold_port=true：代理模式 ──
                 BackendState* bs = findBackend(proto);
@@ -728,5 +601,4 @@ void PortRelay::stop() {
     if (listenThread_) pthread_join(listenThread_, nullptr);
     if (monitorThread_) pthread_join(monitorThread_, nullptr);
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
-    if (tcpMonitorThread_) pthread_join(tcpMonitorThread_, nullptr);
 }
