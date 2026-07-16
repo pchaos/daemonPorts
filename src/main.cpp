@@ -7,6 +7,15 @@
 #include <atomic>
 #include <signal.h>
 #include <unistd.h>
+#include <sstream>
+
+// systemd sd_notify 支持（编译时添加 -DHAVE_SYSTEMD 启用）
+#ifdef HAVE_SYSTEMD
+#include <systemd/sd-daemon.h>
+#define NOTIFY_DID_SEND() (sd_notify(0, "READY=1") > 0)
+#else
+#define NOTIFY_DID_SEND() false
+#endif
 
 static std::vector<std::unique_ptr<PortRelay>> g_relays;
 static std::atomic<bool> g_stop{false};
@@ -22,7 +31,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto cfgs = loadConfig(argv[1]);
+    // "-" 表示从 stdin 读取配置
+    std::vector<PortConfig> cfgs;
+    if (std::string(argv[1]) == "-") {
+        std::stringstream ss;
+        ss << std::cin.rdbuf();
+        cfgs = parseConfig(ss.str());
+    } else {
+        cfgs = loadConfig(argv[1]);
+    }
     if (cfgs.empty()) {
         std::cerr << "错误: 没有有效的端口配置" << std::endl;
         return 1;
@@ -38,6 +55,11 @@ int main(int argc, char* argv[]) {
         auto relay = std::unique_ptr<PortRelay>(new PortRelay(c));
         relay->start();
         g_relays.push_back(std::move(relay));
+    }
+
+    // 通知 systemd 启动完成
+    if (NOTIFY_DID_SEND()) {
+        std::cout << "systemd: READY=1" << std::endl;
     }
 
     pause();
