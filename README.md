@@ -32,8 +32,33 @@ cp build/$(xmake show-config 2>/dev/null | awk '{print $2" "$4}' | tr ' ' '/')/g
 
 # --- 交叉编译示例 ---
 
-# Linux ARM64 (如树莓派)
-xmake f -p linux -a arm64
+# Linux ARM64 (如树莓派) — 方案一：安装交叉编译器
+dnf install -y gcc-c++-aarch64-linux-gnu
+xmake f -p cross -a arm64 --sdk=/usr --cross=aarch64-linux-gnu- -c
+xmake
+
+# Linux ARM64 (如树莓派) — 方案二：使用 Zig 跨编译（无需安装交叉编译器）
+# 需要先创建 zig 交叉编译器包装器
+mkdir -p /tmp/zig-toolchain/bin
+cat > /tmp/zig-toolchain/bin/aarch64-linux-gnu-gcc << 'EOF'
+#!/bin/bash
+exec zig c++ -target aarch64-linux-gnu "$@"
+EOF
+cat > /tmp/zig-toolchain/bin/aarch64-linux-gnu-g++ << 'EOF'
+#!/bin/bash
+exec zig c++ -target aarch64-linux-gnu "$@"
+EOF
+cat > /tmp/zig-toolchain/bin/aarch64-linux-gnu-ar << 'EOF'
+#!/bin/bash
+exec zig ar "$@"
+EOF
+cat > /tmp/zig-toolchain/bin/aarch64-linux-gnu-ranlib << 'EOF'
+#!/bin/bash
+exec zig ranlib "$@"
+EOF
+chmod +x /tmp/zig-toolchain/bin/*
+# 配置 xmake 并编译
+xmake f -c -p cross -a arm64 --sdk=/tmp/zig-toolchain --cross=aarch64-linux-gnu-
 xmake
 
 # Linux x86 32位
