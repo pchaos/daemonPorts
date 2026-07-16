@@ -10,6 +10,8 @@
 
 如果一个端口需要同时支持多种协议（如 HTTP、SOCKS5），或者想把多个独立后端服务聚合到同一个端口对外暴露，可以使用 **mixed 模式**——gatekeeper 检测连接协议类型，按需启动对应的后端，并通过 TCP 隧道转发流量。
 
+如果需要将 gatekeeper 作为 **SOCKS5 代理服务器**使用，可以使用 **proxy 模式**——gatekeeper 直接监听端口，处理完整的 SOCKS5 握手（支持无认证和 USER/PASS 认证），并将连接转发到指定的 HTTP 后端。
+
 支持两种工作模式：
 
 - **simple 模式（默认）**：引导 → 释放端口，后端接管。适合单端口单后端场景
@@ -21,6 +23,7 @@
 - **多平台编译**：Linux（x86_64 / ARM64 / i386 / RISC-V）、macOS（Intel / Apple Silicon）、Windows（MinGW / MSVC）
 - **simple 模式**：引导后释放端口，后端直接接管
 - **mixed 模式**：协议感知引导 或 常驻代理转发，支持 HTTP / SOCKS5 / SOCKS4
+- **proxy 模式**：SOCKS5 代理服务器，支持无认证 / USER+PASS 认证，转发到 HTTP 后端
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
@@ -200,7 +203,9 @@ xmake
 | `retry_seconds` | `10` | `auto_restart: true` 时，绑定失败后的初始重试间隔(秒) |
 | `max_retry_seconds` | `300` | `auto_restart: true` 时，惩罚机制的最大重试间隔上限(秒)，超过此值保持不变 |
 | `auto_restart` | `false` | 后端退出后，下次访问时是否自动重启 |
-| `mode` | `"simple"` | 工作模式：`"simple"`（引导释放）或 `"mixed"`（混合模式） |
+| `mode` | `"simple"` | 工作模式：`"simple"`（引导释放）、`"mixed"`（混合模式）或 `"proxy"`（SOCKS5 代理） |
+| `auth` | `{}` | `proxy` 模式的认证配置，详见下方说明 |
+| `http_target` | `` | `proxy` 模式下 SOCKS5 连接转发的 HTTP 后端地址，如 `127.0.0.1:8080` |
 | `hold_port` | `false` | `mixed` 模式下是否持住端口：`false`=引导后释放，`true`=常驻代理 |
 | `protocols` | `[]` | `mixed` 模式的协议列表，详见下方说明 |
 | `monitor` | - | TCP 连接监控配置，详见下方说明 |
@@ -237,9 +242,48 @@ TCP 连接监控已启动，轮询间隔 60 秒
   [api-service] ACTIVE=0  connections=1  non-listen=0 (idle)
 ```
 
-### 端口活跃跟踪
+### proxy 模式（SOCKS5 代理）
 
-监控启用后，gatekeeper 内部记录每个端口的最后活跃时间，可通过 `hasRecentActivity(minutes)` 接口查询端口是否在最近 N 分钟内有过活跃连接（即存在非 LISTEN 状态的 TCP 连接）。此接口可用于外部程序判断端口是否正在被使用。
+proxy 模式将 gatekeeper 作为 SOCKS5 代理服务器运行。客户端通过 SOCKS5 协议连接 gatekeeper，gatekeeper 完成握手后建立 TCP 隧道将流量转发到指定的 HTTP 后端。
+
+**配置示例：**
+
+```json
+{
+  "ports": [
+    {
+      "name": "socks5-proxy",
+      "listen": ":1080",
+      "mode": "proxy",
+      "auth": {
+        "type": "userpass",
+        "username": "admin",
+        "password": "secret123"
+      },
+      "http_target": "127.0.0.1:8080"
+    }
+  ]
+}
+```
+
+**认证配置：**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `auth.type` | `"none"` | 认证类型：`"none"`（无认证）或 `"userpass"`（用户名密码） |
+| `auth.username` | `` | USERPASS 认证的用户名（`type` 为 `"userpass"` 时必填） |
+| `auth.password` | `` | USERPASS 认证的密码（`type` 为 `"userpass"` 时必填） |
+| `http_target` | `` | SOCKS5 连接转发的 HTTP 后端地址，格式为 `host:port` |
+
+**工作模式：**
+
+1. **无认证**（默认）：客户端直接连接，gatekeeper 接受任何 SOCKS5 请求并转发到 `http_target`
+2. **USER/PASS 认证**：客户端必须先提供正确的用户名密码，验证通过后才允许连接
+
+**使用场景：**
+- 将 SOCKS5 代理请求转发到本地 HTTP 服务
+- 在受限网络环境下通过 SOCKS5 代理访问内部服务
+- 配合认证机制控制代理访问权限
 
 ## 使用
 
@@ -249,6 +293,9 @@ TCP 连接监控已启动，轮询间隔 60 秒
 
 # 从 stdin 读取配置（适用于动态生成配置）
 echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
+
+# SOCKS5 代理模式（快速启动）
+echo '{"ports":[{"listen":":1080","mode":"proxy","http_target":"127.0.0.1:8080"}]}' | ./gatekeeper -
 ```
 
 ## systemd 集成
@@ -408,6 +455,37 @@ gatekeeper 常驻 :3128（不释放）
   └─ 后端启动中 → 发送协议对应临时响应（HTTP 启动页 / SOCKS 拒绝）
 ```
 
+### proxy 模式
+
+proxy 模式将 gatekeeper 作为 SOCKS5 代理服务器运行，**常驻端口不释放**。
+
+执行流程：
+
+```
+gatekeeper 常驻 :1080（SOCKS5 代理）
+  │
+  ├─ 客户端连接
+  │   ├─ 无认证 (NO_AUTH)
+  │   │   └─ 直接建立 TCP 隧道 → http_target
+  │   └─ 有认证 (USER/PASS)
+  │       ├─ 验证用户名密码
+  │       ├─ 失败 → 返回 AUTH_FAILED
+  │       └─ 成功 → 建立 TCP 隧道 → http_target
+  └─ 客户端发送 SOCKS5 请求 (CONNECT/UDP)
+      └─ 转发到 http_target
+```
+
+1. **监听端口**：gatekeeper 监听 SOCKS5 端口
+2. **SOCKS5 握手**：客户端发起 SOCKS5 连接，gatekeeper 处理认证（NO_AUTH 或 USER/PASS）
+3. **目标连接**：认证通过后，gatekeeper 连接 `http_target` 后端
+4. **双向隧道**：建立客户端 ↔ gatekeeper ↔ http_target 的 TCP 双向隧道
+5. **错误处理**：认证失败返回 `0x05 0x01 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00`，其他错误返回 `0x05 0x7E`（不支持）
+
+**注意事项：**
+- `http_target` 必须设置为有效的后端地址（如 `127.0.0.1:8080`）
+- 支持 IPv4 和 IPv6 地址解析
+- 支持域名解析（通过 `getaddrinfo`）
+
 ## 示例
 
 ```bash
@@ -446,6 +524,39 @@ EOF
 
 # stdin 管道（适用于动态生成配置）
 echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
+
+# SOCKS5 代理示例（无认证）
+cat > my-config.json << 'EOF'
+{
+  "ports": [
+    {
+      "listen": ":1080",
+      "mode": "proxy",
+      "http_target": "127.0.0.1:8080"
+    }
+  ]
+}
+EOF
+./gatekeeper my-config.json
+
+# SOCKS5 代理示例（USER/PASS 认证）
+cat > my-config.json << 'EOF'
+{
+  "ports": [
+    {
+      "listen": ":1080",
+      "mode": "proxy",
+      "auth": {
+        "type": "userpass",
+        "username": "admin",
+        "password": "secret123"
+      },
+      "http_target": "127.0.0.1:8080"
+    }
+  ]
+}
+EOF
+./gatekeeper my-config.json
 ```
 
 ## CI/CD
