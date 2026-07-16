@@ -48,7 +48,7 @@ int PortRelay::createListener() {
         std::cerr << "  [" << name_ << "] 无效地址: " << listenAddr_ << std::endl;
         return -1;
     }
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) { perror("socket"); return -1; }
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
