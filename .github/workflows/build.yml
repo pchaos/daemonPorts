@@ -1,0 +1,258 @@
+name: Build Gatekeeper (Multi-Platform)
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  release:
+    types: [published]
+  workflow_dispatch:          # 手动触发
+
+# ── 环境 ────────────────────────────────────────────────────────────
+env:
+  XMAKE_GLOBALDIR: ${{ github.workspace }}/.xmake-global
+  XMAKE_ROOT: y               # 容器内允许 root 运行 xmake
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Linux (x86_64) ── native
+  # ═══════════════════════════════════════════════════════════════════
+  linux-amd64:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release)
+        run: |
+          xmake f -p linux -a x86_64 -m release -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-linux-amd64
+          path: build/linux/x86_64/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Linux (arm64) ── 交叉编译（aarch64-linux-gnu-gcc）
+  # ═══════════════════════════════════════════════════════════════════
+  linux-arm64:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross toolchain & xmake
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        shell: bash
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release, arm64)
+        run: |
+          xmake f -p linux -a arm64 -m release \
+            --toolchain=aarch64-linux-gnu- \
+            -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-linux-arm64
+          path: build/linux/arm64/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Linux (i386) ── 交叉编译
+  # ═══════════════════════════════════════════════════════════════════
+  linux-i386:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-i686-linux-gnu g++-i686-linux-gnu
+        shell: bash
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release, i386)
+        run: |
+          xmake f -p linux -a i386 -m release \
+            --toolchain=i686-linux-gnu- \
+            -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-linux-i386
+          path: build/linux/i386/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Windows (MinGW) ── Linux 宿主交叉编译
+  # ═══════════════════════════════════════════════════════════════════
+  windows-mingw:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, i686]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW cross toolchain
+        run: |
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq mingw-w64-x86_64-dev g++-mingw-w64-x86_64
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq mingw-w64-i686-dev g++-mingw-w64-i686
+          fi
+        shell: bash
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release, MinGW)
+        run: |
+          xmake f -p mingw -a ${{ matrix.arch }} -m release -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-windows-mingw-${{ matrix.arch }}
+          path: build/mingw/${{ matrix.arch }}/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Windows (MSVC) ── 原生 Windows 构建
+  # ═══════════════════════════════════════════════════════════════════
+  windows-msvc:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, x86]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release)
+        run: |
+          xmake f -p windows -a ${{ matrix.arch }} -m release -y
+          xmake
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-windows-msvc-${{ matrix.arch }}
+          path: build/windows/${{ matrix.arch }}/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # macOS (x86_64 + arm64) ── 原生构建
+  # ═══════════════════════════════════════════════════════════════════
+  macos:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13       # Intel macOS
+          - arch: arm64
+            runner: macos-latest    # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release)
+        run: |
+          xmake f -p macosx -a ${{ matrix.arch }} -m release -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-macosx-${{ matrix.arch }}
+          path: build/macosx/${{ matrix.arch }}/*
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Debug 测试 (Linux amd64)
+  # ═══════════════════════════════════════════════════════════════════
+  test:
+    runs-on: ubuntu-latest
+    needs: [linux-amd64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (debug) — runs tests automatically
+        run: |
+          xmake f -p linux -a x86_64 -m debug -y
+          xmake
+        # after_build 中的 test-gatekeeper 会在 debug 模式下自动执行
+
+      - name: Verify gatekeeper binary exists
+        run: |
+          ls -lh build/linux/x86_64/
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 发布：收集所有产物到一个 release
+  # ═══════════════════════════════════════════════════════════════════
+  publish:
+    if: github.event_name == 'release'
+    needs:
+      - linux-amd64
+      - linux-arm64
+      - linux-i386
+      - windows-mingw
+      - windows-msvc
+      - macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
