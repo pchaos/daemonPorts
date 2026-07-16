@@ -51,6 +51,14 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
         if (auto* m = entry->get("mode")) cfg.mode = m->as_str();
         if (auto* h = entry->get("hold_port")) cfg.holdPort = h->as_bool();
 
+        // TCP 监控配置
+        if (auto* mon = entry->get("monitor")) {
+            if (mon->is_obj()) {
+                if (auto* e = mon->get("enabled")) cfg.monitor.enabled = e->as_bool();
+                if (auto* iv = mon->get("interval_seconds")) cfg.monitor.intervalSec = (int)iv->as_num();
+            }
+        }
+
         // 解析 protocols 数组
         if (auto* protos = entry->get("protocols")) {
             if (protos->is_arr()) {

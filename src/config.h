@@ -13,6 +13,12 @@ struct ProtocolConfig {
     bool        enabled = true;
 };
 
+// TCP 监控配置
+struct MonitorConfig {
+    bool        enabled = false;     // 是否启用端口连接监控
+    int         intervalSec = 60;    // 采样间隔（秒）
+};
+
 struct PortConfig {
     std::string name;
     bool        enabled = true;
@@ -29,6 +35,9 @@ struct PortConfig {
     std::string mode = "simple";    // "simple" | "mixed"
     bool        holdPort = false;   // true = gatekeeper 持住端口做代理转发
     std::vector<ProtocolConfig> protocols;  // mixed 模式下的多协议配置
+
+    // TCP 连接监控（可选）
+    MonitorConfig monitor;
 };
 
 // 从 JSON 字符串解析配置

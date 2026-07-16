@@ -2,6 +2,7 @@
 #define GATEKEEPER_RELAY_H
 
 #include "config.h"
+#include "tcp_monitor.h"
 
 #include <string>
 #include <atomic>
@@ -55,6 +56,11 @@ class PortRelay {
     std::vector<BackendState> backends_;
     pthread_t proxyMonitorThread_ = 0;
 
+    // TCP 连接监控
+    int tcpMonitorInterval_ = 0;   // 0=禁用, >0=采样间隔(秒)
+    pthread_t tcpMonitorThread_ = 0;
+    void tcpMonitorLoop();
+
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
     void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
 
@@ -89,6 +95,9 @@ public:
     void stop();
 
     const std::string& name() const { return name_; }
+
+    // startMonitorThread 需要访问私有成员
+    friend void startMonitorThread(PortRelay*);
 };
 
 #endif // GATEKEEPER_RELAY_H
