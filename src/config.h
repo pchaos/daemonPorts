@@ -20,6 +20,8 @@ struct PortConfig {
     std::string command;            // simple 模式 / mixed+hold_port=false 模式使用
     int         delayMs = 5000;
     int         refreshSeconds = 5;
+    int         retrySeconds = 10;
+    int         maxRetrySeconds = 300;
     bool        autoRestart = false;
     int         stackSize = 512;    // 线程栈大小(KB)，默认 512KB
 

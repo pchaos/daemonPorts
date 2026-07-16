@@ -33,6 +33,9 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , command_(cfg.command)
     , delayMs_(cfg.delayMs)
     , refreshSeconds_(cfg.refreshSeconds)
+    , retrySeconds_(cfg.retrySeconds)
+    , retrySecondsBase_(cfg.retrySeconds)
+    , retrySecondsMax_(cfg.maxRetrySeconds)
     , autoRestart_(cfg.autoRestart)
     , mode_(cfg.mode)
     , holdPort_(cfg.holdPort)
@@ -119,7 +122,20 @@ std::string PortRelay::buildStartupResponse() const {
 void PortRelay::listenLoop() {
     while (!stop_.load()) {
         listenFd_ = createListener();
-        if (listenFd_ < 0) break;
+        if (listenFd_ < 0) {
+            if (!autoRestart_ || stop_.load()) break;
+            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
+                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
+            while (!stop_.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            }
+            // 惩罚：当前重试间隔乘以 2，但不超过最大上限
+            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+            continue;
+        }
+
+        // 绑定成功，重置为初始间隔
+        retrySeconds_ = retrySecondsBase_;
 
         std::cout << "  [" << name_ << "] 监听 " << listenAddr_ << std::endl;
 
@@ -404,7 +420,20 @@ void PortRelay::mixedListenLoop() {
     // 主循环（hold_port=true 和 hold_port=false 共用）
     while (!stop_.load()) {
         listenFd_ = createListener();
-        if (listenFd_ < 0) break;
+        if (listenFd_ < 0) {
+            if (!autoRestart_ || stop_.load()) break;
+            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
+                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
+            while (!stop_.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            }
+            // 惩罚：当前重试间隔乘以 2，但不超过最大上限
+            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+            continue;
+        }
+
+        // 绑定成功，重置为初始间隔
+        retrySeconds_ = retrySecondsBase_;
 
         std::cout << "  [" << name_ << "] 混合模式监听 " << listenAddr_
                   << (holdPort_ ? " (hold_port=true)" : "") << std::endl;

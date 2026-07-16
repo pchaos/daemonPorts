@@ -42,6 +42,8 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
         cfg.command = c ? c->as_str() : "";
         if (auto* d = entry->get("delay")) cfg.delayMs = (int)d->as_num();
         if (auto* r = entry->get("refresh_seconds")) cfg.refreshSeconds = (int)r->as_num();
+        if (auto* rt = entry->get("retry_seconds")) cfg.retrySeconds = (int)rt->as_num();
+        if (auto* mr = entry->get("max_retry_seconds")) cfg.maxRetrySeconds = (int)mr->as_num();
         if (auto* r = entry->get("auto_restart")) cfg.autoRestart = r->as_bool();
         if (auto* s = entry->get("stack_size")) cfg.stackSize = (int)s->as_num();
 

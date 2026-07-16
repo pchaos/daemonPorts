@@ -17,6 +17,9 @@ class PortRelay {
     std::string command_;
     int delayMs_;
     int refreshSeconds_;
+    int retrySeconds_;          // 当前重试间隔（会被惩罚机制递增）
+    int retrySecondsBase_;      // 初始重试间隔（成功绑定后重置）
+    int retrySecondsMax_;       // 最大重试间隔上限
     bool autoRestart_;
 
     // 混合模式字段

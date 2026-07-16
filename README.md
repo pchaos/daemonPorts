@@ -84,8 +84,10 @@ g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsyste
       "listen": ":3000",
       "command": "./web-app --port 3000",
       "delay": 5000,
-      "refresh_seconds": 3,
-      "auto_restart": false
+    "refresh_seconds": 3,
+    "retry_seconds": 10,
+    "max_retry_seconds": 300,
+    "auto_restart": false
     },
     {
       "name": "api-service",
@@ -110,6 +112,8 @@ g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsyste
 | `delay` | `5000` | 等待后端就绪的超时时间(ms) |
 | `stack_size` | `512` | 该端口的线程栈大小(KB)，默认 512KB |
 | `refresh_seconds` | `5` | 启动页自动刷新的间隔(秒) |
+| `retry_seconds` | `10` | `auto_restart: true` 时，绑定失败后的初始重试间隔(秒) |
+| `max_retry_seconds` | `300` | `auto_restart: true` 时，惩罚机制的最大重试间隔上限(秒)，超过此值保持不变 |
 | `auto_restart` | `false` | 后端退出后，下次访问时是否自动重启 |
 | `mode` | `"simple"` | 工作模式：`"simple"`（引导释放）或 `"mixed"`（混合模式） |
 | `hold_port` | `false` | `mixed` 模式下是否持住端口：`false`=引导后释放，`true`=常驻代理 |
@@ -263,6 +267,7 @@ journalctl -u gatekeeper       # 查看日志
 5. **等待就绪**：不断尝试连接 `listen` 端口，直到成功或超时
 6. **浏览器自动刷新**后，直连后端程序
 7. **自动重启**（可选）：如果 `auto_restart: true`，后端退出后重新监听，下次访问再次引导
+8. **绑定失败重试**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`。端口释放成功或收到 SIGTERM 时停止重试。
 
 ## 示例
 
