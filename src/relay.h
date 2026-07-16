@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 #include <chrono>
+#include <ctime>
 #include <pthread.h>
 
 class PortRelay {
@@ -61,6 +62,9 @@ class PortRelay {
     pthread_t tcpMonitorThread_ = 0;
     void tcpMonitorLoop();
 
+    // 活跃状态跟踪
+    time_t lastActiveTime_ = 0;
+
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
     void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
 
@@ -95,6 +99,9 @@ public:
     void stop();
 
     const std::string& name() const { return name_; }
+
+    // 查询端口在最近 minutes 分钟内是否有过活跃连接
+    bool hasRecentActivity(int minutes) const;
 
     // startMonitorThread 需要访问私有成员
     friend void startMonitorThread(PortRelay*);

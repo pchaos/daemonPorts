@@ -7,8 +7,10 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <ctime>
 #include <errno.h>
 
 static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
@@ -234,6 +236,23 @@ void PortRelay::tcpMonitorLoop() {
 
         // 查询当前连接
         TcpSnapshot cur = queryPortConnections(port);
+
+        // ── 活跃判断 ──
+        // 活跃 = 存在非 LISTEN 的连接（ESTABLISHED、TIME_WAIT 等）
+        int nonListenCount = 0;
+        for (auto& e : cur.entries) {
+            if (e.state != TCP_LISTEN) nonListenCount++;
+        }
+
+        bool active = nonListenCount > 0;
+        if (active) lastActiveTime_ = time(nullptr);
+
+        std::cout << "  [" << name_ << "] ACTIVE=" << (active ? "1" : "0")
+                  << "  connections=" << cur.entries.size()
+                  << "  non-listen=" << nonListenCount
+                  << (active ? "" : " (idle)")
+                  << std::endl;
+
         if (cur.entries.empty() && !first) {
             std::cout << "  [" << name_ << "] 监控: 无连接（端口空闲）" << std::endl;
             prev = cur;
@@ -302,6 +321,12 @@ void startMonitorThread(PortRelay* relay) {
         static_cast<PortRelay*>(arg)->tcpMonitorLoop();
         return nullptr;
     }, relay);
+}
+
+bool PortRelay::hasRecentActivity(int minutes) const {
+    if (lastActiveTime_ == 0) return false;
+    time_t cutoff = time(nullptr) - minutes * 60;
+    return lastActiveTime_ >= cutoff;
 }
 
 void PortRelay::monitorBackend() {
