@@ -187,4 +187,108 @@ TEST_CASE("parseConfig - stack_size 自定义") {
     REQUIRE(cfgs.size() == 2);
     CHECK(cfgs[0].stackSize == 512);
     CHECK(cfgs[1].stackSize == 512);  // 默认值
+
+TEST_CASE("parseConfig - proxy 模式: 无认证") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "name": "socks5-proxy",
+                "listen": ":1080",
+                "mode": "proxy"
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].name == "socks5-proxy");
+    CHECK(cfgs[0].listenAddr == ":1080");
+    CHECK(cfgs[0].mode == "proxy");
+    CHECK(cfgs[0].auth.type == "none");
+    CHECK(cfgs[0].httpTarget.empty());
+}
+
+TEST_CASE("parseConfig - proxy 模式: userpass 认证") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":1080",
+                "mode": "proxy",
+                "auth": {
+                    "type": "userpass",
+                    "username": "admin",
+                    "password": "secret123"
+                }
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].mode == "proxy");
+    CHECK(cfgs[0].auth.type == "userpass");
+    CHECK(cfgs[0].auth.username == "admin");
+    CHECK(cfgs[0].auth.password == "secret123");
+}
+
+TEST_CASE("parseConfig - proxy 模式: http_target 配置") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":3128",
+                "mode": "proxy",
+                "http_target": "127.0.0.1:8080"
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].httpTarget == "127.0.0.1:8080");
+    CHECK(cfgs[0].mode == "proxy");
+    CHECK(cfgs[0].auth.type == "none");
+}
+
+TEST_CASE("parseConfig - proxy 模式: 认证 + http_target") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":1080",
+                "mode": "proxy",
+                "auth": { "type": "userpass", "username": "user", "password": "pass" },
+                "http_target": "127.0.0.1:9090"
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].auth.type == "userpass");
+    CHECK(cfgs[0].auth.username == "user");
+    CHECK(cfgs[0].httpTarget == "127.0.0.1:9090");
+}
+
+TEST_CASE("parseConfig - proxy 模式: 默认值") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":1080", "mode": "proxy" }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].mode == "proxy");
+    CHECK(cfgs[0].auth.type == "none");
+    CHECK(cfgs[0].auth.username.empty());
+    CHECK(cfgs[0].httpTarget.empty());
+    CHECK(cfgs[0].enabled == true);
+    CHECK(cfgs[0].autoRestart == false);
+}
+
+TEST_CASE("parseConfig - proxy 模式: auth 对象不完整时只取已有字段") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":1080",
+                "mode": "proxy",
+                "auth": { "type": "userpass" }
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].auth.type == "userpass");
+    CHECK(cfgs[0].auth.username.empty());
+    CHECK(cfgs[0].auth.password.empty());
+}
+
 }

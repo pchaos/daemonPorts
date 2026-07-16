@@ -4,6 +4,13 @@
 #include <string>
 #include <vector>
 
+// SOCKS5 认证配置（proxy mode 使用）
+struct AuthConfig {
+    std::string type = "none";      // "none" | "userpass"
+    std::string username;
+    std::string password;
+};
+
 // 单个协议的后端配置（mixed mode 使用）
 struct ProtocolConfig {
     std::string type;      // "http" | "socks5" | "socks4"
@@ -32,9 +39,13 @@ struct PortConfig {
     int         stackSize = 512;    // 线程栈大小(KB)，默认 512KB
 
     // 混合模式字段
-    std::string mode = "simple";    // "simple" | "mixed"
+    std::string mode = "simple";    // "simple" | "mixed" | "proxy"
     bool        holdPort = false;   // true = gatekeeper 持住端口做代理转发
     std::vector<ProtocolConfig> protocols;  // mixed 模式下的多协议配置
+
+    // proxy 模式字段
+    AuthConfig  auth;               // SOCKS5 认证配置（proxy mode）
+    std::string httpTarget;         // HTTP 转发目标地址（proxy mode），如 "127.0.0.1:8080"
 
     // TCP 连接监控（可选）
     MonitorConfig monitor;

@@ -28,6 +28,10 @@ class PortRelay {
     bool holdPort_;
     std::vector<ProtocolConfig> protocols_;
 
+    // proxy 模式字段
+    AuthConfig  auth_;
+    std::string httpTarget_;
+
     int listenFd_ = -1;
     pid_t backendPid_ = 0;
     int stackSize_ = 256;  // KB
@@ -79,6 +83,9 @@ class PortRelay {
     void mixedListenLoop();
     std::string detectProtocol(int fd);
     void sendMixedResponse(int fd, const std::string& proto);
+
+    // proxy 模式
+    void socks5ListenLoop();
 
     // hold_port=true 代理模式
     int  connectToBackend(const std::string& addr);

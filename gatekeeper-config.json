@@ -1,0 +1,13 @@
+{
+  "ports": [
+    {
+      "name": "hackfight",
+      "enabled": true,
+      "listen": ":3000",
+      "command": "/usr/local/bin/start-hackfight.sh",
+      "delay": 30000,
+      "refresh_seconds": 3,
+      "auto_restart": true
+    }
+  ]
+}

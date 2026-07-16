@@ -51,6 +51,17 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
         if (auto* m = entry->get("mode")) cfg.mode = m->as_str();
         if (auto* h = entry->get("hold_port")) cfg.holdPort = h->as_bool();
 
+        // proxy 模式字段：auth 配置
+        if (auto* a = entry->get("auth")) {
+            if (a->is_obj()) {
+                if (auto* t = a->get("type")) cfg.auth.type = t->as_str();
+                if (auto* u = a->get("username")) cfg.auth.username = u->as_str();
+                if (auto* p = a->get("password")) cfg.auth.password = p->as_str();
+            }
+        }
+        // proxy 模式字段：HTTP 转发目标
+        if (auto* ht = entry->get("http_target")) cfg.httpTarget = ht->as_str();
+
         // TCP 监控配置
         if (auto* mon = entry->get("monitor")) {
             if (mon->is_obj()) {

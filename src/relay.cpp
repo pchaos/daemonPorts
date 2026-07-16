@@ -10,6 +10,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <netdb.h>
 #include <ctime>
 #include <errno.h>
 
@@ -42,6 +43,8 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , mode_(cfg.mode)
     , holdPort_(cfg.holdPort)
     , protocols_(cfg.protocols)
+    , auth_(cfg.auth)
+    , httpTarget_(cfg.httpTarget)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
 
@@ -411,6 +414,216 @@ void PortRelay::proxyMonitorLoop() {
     }
 }
 
+// ── proxy 模式：SOCKS5 代理主循环 ──
+// 常驻端口，处理 SOCKS5 代理（NO_AUTH 或 USER/PASS 认证）
+// 支持 HTTP 连接转发到 httpTarget_（如果配置了）
+
+// 辅助：从 fd 精确读取 n 字节，返回实际读取数
+static int recv_exact(int fd, unsigned char* buf, int n) {
+    int total = 0;
+    while (total < n) {
+        ssize_t r = read(fd, buf + total, n - total);
+        if (r <= 0) return total > 0 ? total : -1;
+        total += r;
+    }
+    return total;
+}
+
+void PortRelay::socks5ListenLoop() {
+    while (!stop_.load()) {
+        listenFd_ = createListener();
+        if (listenFd_ < 0) {
+            if (!autoRestart_ || stop_.load()) break;
+            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
+                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
+            while (!stop_.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            }
+            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+            continue;
+        }
+        retrySeconds_ = retrySecondsBase_;
+
+        std::cout << "  [" << name_ << "] SOCKS5 代理监听 " << listenAddr_
+                  << " (auth=" << auth_.type << ")" << std::endl;
+
+        while (!stop_.load()) {
+            sockaddr_in cli;
+            socklen_t len = sizeof(cli);
+            int fd = accept(listenFd_, (struct sockaddr*)&cli, &len);
+            if (fd < 0) {
+                if (stop_.load() || errno == EINVAL) break;
+                continue;
+            }
+
+            std::string proto = detectProtocol(fd);
+            std::cout << "  [" << name_ << "] 检测到 " << proto << " 连接" << std::endl;
+
+            if (proto == "socks5") {
+                // ── SOCKS5 认证协商 ──
+                unsigned char buf[256];
+                // 读版本 + 方法数 + 方法列表
+                if (recv_exact(fd, buf, 2) != 2) { close(fd); continue; }
+                int nmethods = buf[1];
+                if (nmethods < 1 || nmethods > 255 ||
+                    recv_exact(fd, buf, nmethods) != nmethods) { close(fd); continue; }
+
+                bool hasNoAuth = false, hasUserPass = false;
+                for (int i = 0; i < nmethods; i++) {
+                    if (buf[i] == 0x00) hasNoAuth = true;
+                    if (buf[i] == 0x02) hasUserPass = true;
+                }
+
+                unsigned char method = 0xff;  // 默认拒绝
+                bool useUserPass = false;
+                if (auth_.type == "userpass" && hasUserPass) {
+                    method = 0x02;
+                    useUserPass = true;
+                } else if (hasNoAuth) {
+                    method = 0x00;
+                }
+                unsigned char authResp[] = {0x05, method};
+                write(fd, authResp, sizeof(authResp));
+
+                if (method == 0xff) { close(fd); continue; }
+
+                // ── USER/PASS 认证子协商 ──
+                if (useUserPass) {
+                    if (recv_exact(fd, buf, 2) != 2) { close(fd); continue; }
+                    int ulen = buf[1];
+                    if (ulen < 1 || ulen > 255 ||
+                        recv_exact(fd, buf, ulen) != ulen) { close(fd); continue; }
+                    std::string uname((const char*)buf, ulen);
+                    if (recv_exact(fd, buf, 1) != 1) { close(fd); continue; }
+                    int plen = buf[0];
+                    if (plen < 1 || plen > 255 ||
+                        recv_exact(fd, buf, plen) != plen) { close(fd); continue; }
+                    std::string passwd((const char*)buf, plen);
+
+                    bool ok = (uname == auth_.username && passwd == auth_.password);
+                    int r = ok ? 0 : 1;
+                    unsigned char upResp[] = {0x01, (unsigned char)r};
+                    write(fd, upResp, sizeof(upResp));
+                    if (!ok) { close(fd); continue; }
+                }
+
+                // ── SOCKS5 请求解析 ──
+                // 格式: ver(1) + cmd(1) + rsv(1) + atyp(1) + dst.addr(可变) + dst.port(2)
+                unsigned char hdr[4];
+                if (recv_exact(fd, hdr, 4) != 4) { close(fd); continue; }
+                unsigned char cmd = hdr[1];
+                unsigned char atyp = hdr[3];
+
+                // 只支持 CONNECT (0x01)
+                if (cmd != 0x01) { close(fd); continue; }
+
+                // 解析目标地址
+                std::string targetAddr;
+                int targetPort = 0;
+                bool addrOk = false;
+
+                if (atyp == 0x01) {
+                    // IPv4: 4 字节
+                    unsigned char addr[4];
+                    if (recv_exact(fd, addr, 4) != 4) { close(fd); continue; }
+                    char ip[32];
+                    snprintf(ip, sizeof(ip), "%d.%d.%d.%d", addr[0], addr[1], addr[2], addr[3]);
+                    targetAddr = ip;
+                    addrOk = true;
+                } else if (atyp == 0x03) {
+                    // 域名: 1 字节长度 + N 字节域名
+                    unsigned char dlen;
+                    if (recv_exact(fd, &dlen, 1) != 1) { close(fd); continue; }
+                    if (dlen < 1) { close(fd); continue; }
+                    unsigned char domain[256];
+                    if (recv_exact(fd, domain, dlen) != (int)dlen) { close(fd); continue; }
+                    targetAddr = std::string((const char*)domain, dlen);
+                    addrOk = true;
+                } else if (atyp == 0x04) {
+                    close(fd);
+                    continue;
+                }
+
+                // 读端口 (2 字节, 网络字节序)
+                unsigned char portBytes[2];
+                if (recv_exact(fd, portBytes, 2) != 2) { close(fd); continue; }
+                targetPort = (portBytes[0] << 8) | portBytes[1];
+                if (!addrOk || targetPort <= 0) { close(fd); continue; }
+
+                std::string targetStr = targetAddr + ":" + std::to_string(targetPort);
+                std::cout << "  [" << name_ << "] SOCKS5 CONNECT " << targetStr << std::endl;
+
+                // ── 连接目标地址 ──
+                // 用 getaddrinfo 支持域名解析
+                struct addrinfo hints, *res = nullptr;
+                memset(&hints, 0, sizeof(hints));
+                hints.ai_family = AF_UNSPEC;
+                hints.ai_socktype = SOCK_STREAM;
+                char portStr[16];
+                snprintf(portStr, sizeof(portStr), "%d", targetPort);
+
+                int targetFd = -1;
+                if (getaddrinfo(targetAddr.c_str(), portStr, &hints, &res) == 0) {
+                    for (struct addrinfo* rp = res; rp; rp = rp->ai_next) {
+                        targetFd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+                        if (targetFd < 0) continue;
+                        if (connect(targetFd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+                        close(targetFd);
+                        targetFd = -1;
+                    }
+                    freeaddrinfo(res);
+                }
+
+                if (targetFd < 0) {
+                    // 连接失败 → SOCKS5 响应: 一般失败
+                    unsigned char resp[] = {0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0};
+                    write(fd, resp, sizeof(resp));
+                    close(fd);
+                    std::cout << "  [" << name_ << "] SOCKS5 连接失败: " << targetStr << std::endl;
+                    continue;
+                }
+
+                // ── SOCKS5 响应: 成功 ──
+                unsigned char resp[] = {0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0};
+                write(fd, resp, sizeof(resp));
+                std::cout << "  [" << name_ << "] SOCKS5 隧道建立: 客户端 ↔ " << targetStr << std::endl;
+
+                // ── 双向隧道 ──
+                std::atomic<bool> done1{false}, done2{false};
+                std::thread t1(pipeRelay, fd, targetFd, std::ref(done1));
+                std::thread t2(pipeRelay, targetFd, fd, std::ref(done2));
+
+                while (!done1 && !done2) usleep(50000);
+
+                shutdown(fd, SHUT_RDWR);
+                shutdown(targetFd, SHUT_RDWR);
+                if (t1.joinable()) t1.join();
+                if (t2.joinable()) t2.join();
+                close(fd);
+                close(targetFd);
+                std::cout << "  [" << name_ << "] SOCKS5 隧道关闭: " << targetStr << std::endl;
+
+            } else if (proto == "http" && !httpTarget_.empty()) {
+                // HTTP → 转发到 httpTarget_
+                proxyConnection(fd, httpTarget_);
+            } else {
+                close(fd);
+            }
+        }
+
+        if (listenFd_ >= 0) {
+            close(listenFd_);
+            listenFd_ = -1;
+        }
+        if (!autoRestart_ || stop_.load()) break;
+        while (!stop_.load() && backendPid_ != 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        if (stop_.load()) break;
+        std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
+    }
+}
+
 // ── mixed 模式：主循环 ──
 // hold_port=false: 协议感知引导，启动后端后释放端口（同 simple 模式）
 // hold_port=true:  常驻端口，检测协议并转发到对应后端
@@ -558,6 +771,7 @@ void PortRelay::createThread(pthread_t& thread, void* (*func)(void*), void* arg)
 void PortRelay::start() {
     // 根据 mode 选择对应的监听循环：
     //   "mixed" → 协议感知混合模式，支持多种协议引导响应
+    //   "proxy" → SOCKS5 代理模式，常驻端口做 SOCKS5/HTTP 代理
     //   其他     → 兼容旧的 simple 模式，只发 HTTP 启动页（默认行为）
     if (mode_ == "mixed") {
         createThread(listenThread_, [](void* arg) -> void* {
@@ -570,6 +784,11 @@ void PortRelay::start() {
                 return nullptr;
             }, this);
         }
+    } else if (mode_ == "proxy") {
+        createThread(listenThread_, [](void* arg) -> void* {
+            static_cast<PortRelay*>(arg)->socks5ListenLoop();
+            return nullptr;
+        }, this);
     } else {
         createThread(listenThread_, [](void* arg) -> void* {
             static_cast<PortRelay*>(arg)->listenLoop();

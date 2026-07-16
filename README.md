@@ -1,5 +1,9 @@
 # daemonPorts - 多端口启动引导门卫
 
+[![Build Status](https://github.com/pchaos/daemonPorts/actions/workflows/build.yml/badge.svg)](https://github.com/pchaos/daemonPorts/actions/workflows/build.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey.svg)](https://github.com/pchaos/daemonPorts/actions/workflows/build.yml)
+
 ## 场景
 
 有一个或多个占用内存较多的程序，每个程序监听一个端口提供 TCP 服务。门卫程序先接管这些端口（二进制 ~84KB，运行 5 个端口时 RSS 约 4MB），当有人访问某个端口时，页面显示 **"xxx 启动中"**，自动启动对应的后端程序，然后释放端口让后端程序接管。
@@ -11,6 +15,45 @@
 - **simple 模式（默认）**：引导 → 释放端口，后端接管。适合单端口单后端场景
 - **mixed 模式**：协议感知引导，或常驻端口做协议路由。适合 sing-box 等多种协议聚合场景
 
+## 特性
+
+- **极简内存占用**：二进制 ~84KB，每端口线程栈从 8MB 缩减至 512KB（可配置），100 端口 VmSize 仅 ~58MB
+- **多平台编译**：Linux（x86_64 / ARM64 / i386 / RISC-V）、macOS（Intel / Apple Silicon）、Windows（MinGW / MSVC）
+- **simple 模式**：引导后释放端口，后端直接接管
+- **mixed 模式**：协议感知引导 或 常驻代理转发，支持 HTTP / SOCKS5 / SOCKS4
+- **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
+- **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
+- **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
+- **协议无关**：监控和端口接管在 TCP 层运作，HTTP/HTTPS 端口对 gatekeeper 无区别——只认端口号，不看协议。HTTPS 的 TLS 流量不会被解密或检测
+- **端口活跃跟踪**：`hasRecentActivity()` 接口，查询端口是否在最近 N 分钟内有过活跃连接
+- **systemd 集成**：`sd_notify` 精确通知启动完成，支持 `Type=notify`
+- **stdin 配置加载**：`./gatekeeper -` 从标准输入读取配置，便于动态生成
+- **CI/CD 自动构建**：GitHub Actions 多平台交叉编译，发布自动打包
+
+## 项目结构
+
+```
+daemonPorts/
+├── src/
+│   ├── main.cpp        # 程序入口，统一监控线程
+│   ├── config.h/cpp     # 配置解析（JSON）
+│   ├── relay.h/cpp      # PortRelay 类，端口接力核心
+│   ├── tcp_monitor.h/cpp # TCP 连接监控（NETLINK_INET_DIAG）
+│   └── json.h/cpp       # 轻量 JSON 解析器
+├── test/
+│   ├── doctest.h        # 单文件测试框架
+│   ├── test_main.cpp
+│   ├── test_json.cpp
+│   ├── test_config.cpp
+│   ├── test_relay.cpp
+│   └── test_tcp_monitor.cpp
+├── xmake.lua            # xmake 构建脚本（多平台/多架构）
+├── gatekeeper.service   # systemd 服务模板
+├── gatekeeper-config.json # 示例配置
+├── start-deeptutor.sh   # deeptutor 容器启动脚本
+└── .github/workflows/build.yml  # GitHub Actions CI/CD
+```
+
 ## 编译
 
 ### 方式一：xmake（推荐，支持跨平台/跨架构）
@@ -20,6 +63,10 @@
 # curl -fsSL https://xmake.io/install.sh | bash
 
 # 默认编译（当前平台）
+xmake
+
+# 发布模式编译
+xmake f -m release
 xmake
 
 # systemd 集成编译（启用 sd_notify）
@@ -83,23 +130,32 @@ xmake f -c   # 清除配置缓存
 ```
 
 > 更换平台/架构后，先执行 `xmake f -c` 清理缓存再重新配置编译。
->
-> 启用 `-DHAVE_SYSTEMD` 后，编译时需要 `-lsystemd` 链接器参数；xmake 会自动检测并添加。
 
 ### 方式二：g++ 直接编译
 
 ```bash
 # 标准编译
-g++ -std=c++11 -O2 -o gatekeeper gatekeeper.cpp -lpthread
+g++ -std=c++11 -O2 -o gatekeeper src/*.cpp -lpthread
 strip gatekeeper  # 可选，减小体积
 
 # systemd 集成编译
-g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsystemd
+g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper src/*.cpp -lpthread -lsystemd
+```
+
+## 测试
+
+```bash
+# 编译并自动运行测试（debug 模式）
+xmake f -m debug
+xmake
+
+# 手动运行测试
+./build/linux/x86_64/debug/test-gatekeeper
 ```
 
 ## 配置
 
-编辑 `config.json`：
+编辑配置文件（如 `gatekeeper-config.json`）：
 
 ```json
 {
@@ -109,18 +165,22 @@ g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsyste
       "listen": ":3000",
       "command": "./web-app --port 3000",
       "delay": 5000,
-    "refresh_seconds": 3,
-    "retry_seconds": 10,
-    "max_retry_seconds": 300,
-    "auto_restart": false
+      "refresh_seconds": 3,
+      "retry_seconds": 10,
+      "max_retry_seconds": 300,
+      "auto_restart": true,
+      "stack_size": 512,
+      "monitor": {
+        "enabled": true,
+        "interval_seconds": 60
+      }
     },
     {
       "name": "api-service",
       "listen": ":4000",
       "command": "./api-server --port 4000",
       "delay": 5000,
-      "refresh_seconds": 3,
-      "auto_restart": true
+      "auto_restart": false
     }
   ]
 }
@@ -143,6 +203,120 @@ g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsyste
 | `mode` | `"simple"` | 工作模式：`"simple"`（引导释放）或 `"mixed"`（混合模式） |
 | `hold_port` | `false` | `mixed` 模式下是否持住端口：`false`=引导后释放，`true`=常驻代理 |
 | `protocols` | `[]` | `mixed` 模式的协议列表，详见下方说明 |
+| `monitor` | - | TCP 连接监控配置，详见下方说明 |
+
+### TCP 连接监控
+
+gatekeeper 支持通过 NETLINK_INET_DIAG 实时采样端口的 TCP 连接状态（仅 Linux 平台）。
+
+```json
+{
+  "ports": [
+    {
+      "listen": ":3000",
+      "command": "./app",
+      "monitor": {
+        "enabled": true,
+        "interval_seconds": 60
+      }
+    }
+  ]
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `monitor.enabled` | `false` | 是否启用 TCP 连接监控 |
+| `monitor.interval_seconds` | `60` | 采样间隔（秒） |
+
+启用后，gatekeeper 会在一个统一监控线程中轮询所有启用了监控的端口，查询其 TCP 连接状态并更新活跃时间戳。日志示例：
+
+```
+TCP 连接监控已启动，轮询间隔 60 秒
+  [web-service] ACTIVE=1  connections=3  non-listen=2
+  [api-service] ACTIVE=0  connections=1  non-listen=0 (idle)
+```
+
+### 端口活跃跟踪
+
+监控启用后，gatekeeper 内部记录每个端口的最后活跃时间，可通过 `hasRecentActivity(minutes)` 接口查询端口是否在最近 N 分钟内有过活跃连接（即存在非 LISTEN 状态的 TCP 连接）。此接口可用于外部程序判断端口是否正在被使用。
+
+## 使用
+
+```bash
+# 从文件读取配置
+./gatekeeper gatekeeper-config.json
+
+# 从 stdin 读取配置（适用于动态生成配置）
+echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
+```
+
+## systemd 集成
+
+编译时添加 `-DHAVE_SYSTEMD` 即可启用 systemd sd_notify 支持。gatekeeper 会在使用完毕后发送 `READY=1` 通知，让 systemd 准确知道启动完成时机。
+
+### 安装服务文件
+
+项目附带 `gatekeeper.service` 模板，安装步骤：
+
+```bash
+# 1. 复制二进制和服务文件
+cp build/linux/x86_64/release/gatekeeper /usr/local/bin/
+cp gatekeeper.service /etc/systemd/system/
+cp gatekeeper-config.json /usr/local/etc/gatekeeper/config.json
+
+# 2. 修改 service 文件中的 ExecStart 路径（如需要）
+#    - 使用 Type=notify（需 HAVE_SYSTEMD 编译）
+#    - 使用 Type=simple（标准编译）
+
+# 3. 启用并启动
+sudo systemctl daemon-reload
+sudo systemctl enable --now gatekeeper
+```
+
+> `Type=notify` 配合 `sd_notify()` 可以精确感知 gatekeeper 是否成功启动（端口已接管）。非 systemd 编译版本使用 `Type=simple` 即可。
+
+### 常用操作
+
+```bash
+systemctl enable --now gatekeeper   # 启用并启动
+systemctl status gatekeeper         # 查看状态
+journalctl -u gatekeeper -f         # 查看实时日志
+systemctl restart gatekeeper        # 重启服务
+```
+
+### 安全加固
+
+`gatekeeper.service` 模板内置了 systemd 安全加固：
+
+- `NoNewPrivileges=yes` — 禁止提权
+- `ProtectSystem=strict` — 只读文件系统
+- `ProtectHome=yes` — 隐藏用户主目录
+- `PrivateTmp=yes` — 隔离临时目录
+- `LimitNOFILE=65536` — 文件描述符限制
+- `LimitNPROC=1024` — 进程数限制
+
+如果后端程序需要读写特定目录，可将 `ProtectSystem` 改为 `full`，或通过 `ReadWritePaths=` 放行。
+
+## 工作原理
+
+### simple 模式流程
+
+```
+阶段1: 客户端 ──→ :3000 ──→ gatekeeper (返回 "web 启动中..." 页面)
+阶段2: gatekeeper fork+exec 启动后端程序，关闭 :3000 监听
+阶段3: 后端程序绑定 :3000
+阶段4: 浏览器自动刷新 ──→ :3000 ──→ 后端程序
+```
+
+1. **门卫监听** `listen` 端口，占用极少内存（二进制 ~84KB，RSS ~4MB/5端口，每增加 1 端口 RSS 增加约 16KB；线程栈从默认 8MB 缩减为 256KB，100 端口 VmSize 仅 58MB）
+2. **首次连接**时，返回含 `<meta http-equiv="refresh">` 的 HTML 页面
+3. **同时** fork+exec 执行 `command`（监听 socket 带有 `SOCK_CLOEXEC` 标志，确保子进程不会继承该端口）
+4. **释放端口**：关闭自己的监听 socket，让后端程序绑定
+5. **等待就绪**：不断尝试连接 `listen` 端口，直到成功或超时
+6. **浏览器自动刷新**后，直连后端程序
+7. **自动重启**（可选）：如果 `auto_restart: true`，后端退出后重新监听，下次访问再次引导
+8. **绑定失败重试**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`。端口释放成功或收到 SIGTERM 时停止重试。
 
 ### mixed 模式
 
@@ -173,9 +347,12 @@ gatekeeper 检测连接协议类型，发送对应的引导响应，然后启动
 | 连接类型 | 特征 | 引导响应 |
 |---------|------|---------|
 | HTTP | `GET` / `POST` 等 | 启动页 HTML（浏览器自动刷新） |
+| HTTPS | TLS 握手（首字节 `0x16`） | **不支持** — 不匹配，静默关闭 |
 | SOCKS5 | 首字节 `0x05` | `0x05 0xFF`（无可用认证方法） |
 | SOCKS4 | 首字节 `0x04` | 请求被拒 |
 | 未知 | 不匹配以上 | 静默关闭 |
+
+> HTTPS 流量经过 TLS 加密，gatekeeper 无法在 TCP 层解密或识别 HTTP 请求内容。如需 HTTPS 支持，建议在后端使用 TLS 终止代理（如 nginx/caddy），或使用 simple 模式让 HTTPS 后端直接接管端口。
 
 #### hold_port: true — 协议路由代理（持住模式）
 
@@ -231,74 +408,11 @@ gatekeeper 常驻 :3128（不释放）
   └─ 后端启动中 → 发送协议对应临时响应（HTTP 启动页 / SOCKS 拒绝）
 ```
 
-## 使用
-
-```bash
-# 从文件读取配置
-./gatekeeper config.json
-
-# 从 stdin 读取配置
-echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
-```
-
-## systemd 集成
-
-编译时添加 `-DHAVE_SYSTEMD` 即可启用 systemd sd_notify 支持。gatekeeper 会在使用完毕后发送 `READY=1` 通知，让 systemd 准确知道启动完成时机。
-
-### 安装服务文件
-
-```ini
-# /etc/systemd/system/gatekeeper.service
-[Unit]
-Description=DaemonPorts Gatekeeper - 多端口启动引导
-After=network.target
-
-[Service]
-Type=notify
-ExecStart=/path/to/gatekeeper /path/to/config.json
-Restart=on-failure
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-> `Type=notify` 配合 `sd_notify()` 可以精确感知 gatekeeper 是否成功启动（端口已接管）。非 systemd 编译版本使用 `Type=simple` 即可。
-
-### 启动
-
-```bash
-systemctl enable --now gatekeeper
-systemctl status gatekeeper    # 查看状态
-journalctl -u gatekeeper       # 查看日志
-```
-
-## 工作原理
-
-启动后，每个端口进入**启动引导模式**：
-
-```
-阶段1: 客户端 ──→ :3000 ──→ gatekeeper (返回 "web 启动中..." 页面)
-阶段2: gatekeeper 启动后端程序，关闭 :3000
-阶段3: 后端程序绑定 :3000
-阶段4: 浏览器自动刷新 ──→ :3000 ──→ 后端程序
-```
-
-1. **门卫监听** `listen` 端口，占用极少内存（二进制 ~84KB，RSS ~4MB/5端口，每增加 1 端口 RSS 增加约 16KB；线程栈从默认 8MB 缩减为 256KB，100 端口 VmSize 仅 58MB）
-2. **首次连接**时，返回含 `<meta http-equiv="refresh">` 的 HTML 页面
-3. **同时** fork+exec 执行 `command`
-4. **释放端口**：关闭自己的监听 socket，让后端程序绑定
-5. **等待就绪**：不断尝试连接 `listen` 端口，直到成功或超时
-6. **浏览器自动刷新**后，直连后端程序
-7. **自动重启**（可选）：如果 `auto_restart: true`，后端退出后重新监听，下次访问再次引导
-8. **绑定失败重试**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`。端口释放成功或收到 SIGTERM 时停止重试。
-
 ## 示例
 
 ```bash
 # Python HTTP 服务器
-./gatekeeper -config <<<EOF
+cat > my-config.json << 'EOF'
 {
   "ports": [
     {
@@ -308,9 +422,10 @@ journalctl -u gatekeeper       # 查看日志
   ]
 }
 EOF
+./gatekeeper my-config.json
 
 # 多端口示例
-cat > my-config.json << 'CFG'
+cat > my-config.json << 'EOF'
 {
   "ports": [
     {
@@ -326,9 +441,35 @@ cat > my-config.json << 'CFG'
     }
   ]
 }
-CFG
+EOF
 ./gatekeeper my-config.json
 
 # stdin 管道（适用于动态生成配置）
 echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
 ```
+
+## CI/CD
+
+项目使用 GitHub Actions 进行多平台自动构建。支持的平台/架构：
+
+| 平台 | 架构 | 构建方式 |
+|------|------|---------|
+| Linux | x86_64 | 原生编译 |
+| Linux | arm64 | 交叉编译（aarch64-linux-gnu） |
+| Linux | i386 | 交叉编译（i686-linux-gnu） |
+| Windows | x86_64 | MinGW 交叉编译 / MSVC 原生 |
+| Windows | i686 | MinGW 交叉编译 / MSVC 原生 |
+| macOS | x86_64 | 原生编译（Intel） |
+| macOS | arm64 | 原生编译（Apple Silicon） |
+
+构建触发条件：
+- `push` 到 main/master/develop 分支
+- Pull Request 到 main/master 分支
+- Release 发布
+- 手动触发（workflow_dispatch）
+
+Release 发布时会自动收集所有平台构建产物并上传到 GitHub Releases。
+
+## License
+
+MIT License — 详见 [LICENSE](LICENSE) 文件。
