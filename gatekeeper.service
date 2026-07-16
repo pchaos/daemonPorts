@@ -1,0 +1,58 @@
+# DaemonPorts Gatekeeper - 多端口启动引导服务
+#
+# 安装:
+#   cp gatekeeper /usr/local/bin/
+#   cp gatekeeper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gatekeeper
+#
+# 编译说明:
+#   默认编译（Type=simple）: xmake
+#   systemd 集成（Type=notify）: xmake f -D HAVE_SYSTEMD=y && xmake
+#
+# 启用 HAVE_SYSTEMD 编译后，将 Type 改为 notify，systemd 会等待
+# gatekeeper 真正接管端口后才返回 "active" 状态。
+
+[Unit]
+Description=DaemonPorts Gatekeeper - 多端口启动引导
+Documentation=https://github.com/your-repo/daemonPorts
+After=network.target
+Wants=network.target
+
+[Service]
+# ── 编译模式 ──────────────────────────────────
+# 没有 -DHAVE_SYSTEMD 编译 → 用 Type=simple
+# 有  -DHAVE_SYSTEMD 编译 → 用 Type=notify
+# ──────────────────────────────────────────────
+Type=notify
+
+# ── 程序路径 ──────────────────────────────────
+# 修改为实际的 gatekeeper 二进制路径
+ExecStart=/usr/local/bin/gatekeeper /etc/gatekeeper/config.json
+
+# ── 可选：从 stdin 加载配置 ──────────────────
+# ExecStart=/usr/local/bin/gatekeeper -
+# StandardInput=file:/etc/gatekeeper/config.json
+
+# ── 重启策略 ──────────────────────────────────
+Restart=on-failure
+RestartSec=5s
+
+# ── 资源限制 ──────────────────────────────────
+LimitNOFILE=65536          # 最大文件描述符数（每端口至少 2 个 socket）
+LimitNPROC=1024            # 最大进程数（后端程序也算在内）
+
+# ── 安全加固 ──────────────────────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# 如果后端程序需要读写特定目录，改用 ProtectSystem=full
+# 或通过 ReadWritePaths= 放行
+
+# ── 日志（默认走 journald）───────────────────
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

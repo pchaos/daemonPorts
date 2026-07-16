@@ -22,6 +22,10 @@
 # 默认编译（当前平台）
 xmake
 
+# systemd 集成编译（启用 sd_notify）
+xmake f -D HAVE_SYSTEMD=y
+xmake
+
 # 输出文件位于 build/<平台>/<架构>/gatekeeper
 # 也可直接复制到项目根目录
 cp build/$(xmake show-config 2>/dev/null | awk '{print $2" "$4}' | tr ' ' '/')/gatekeeper .
@@ -54,12 +58,18 @@ xmake f -c   # 清除配置缓存
 ```
 
 > 更换平台/架构后，先执行 `xmake f -c` 清理缓存再重新配置编译。
+>
+> 启用 `-DHAVE_SYSTEMD` 后，编译时需要 `-lsystemd` 链接器参数；xmake 会自动检测并添加。
 
 ### 方式二：g++ 直接编译
 
 ```bash
+# 标准编译
 g++ -std=c++11 -O2 -o gatekeeper gatekeeper.cpp -lpthread
 strip gatekeeper  # 可选，减小体积
+
+# systemd 集成编译
+g++ -std=c++11 -DHAVE_SYSTEMD -O2 -o gatekeeper gatekeeper.cpp -lpthread -lsystemd
 ```
 
 ## 配置
@@ -195,7 +205,44 @@ gatekeeper 常驻 :3128（不释放）
 ## 使用
 
 ```bash
+# 从文件读取配置
 ./gatekeeper config.json
+
+# 从 stdin 读取配置
+echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
+```
+
+## systemd 集成
+
+编译时添加 `-DHAVE_SYSTEMD` 即可启用 systemd sd_notify 支持。gatekeeper 会在使用完毕后发送 `READY=1` 通知，让 systemd 准确知道启动完成时机。
+
+### 安装服务文件
+
+```ini
+# /etc/systemd/system/gatekeeper.service
+[Unit]
+Description=DaemonPorts Gatekeeper - 多端口启动引导
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/path/to/gatekeeper /path/to/config.json
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> `Type=notify` 配合 `sd_notify()` 可以精确感知 gatekeeper 是否成功启动（端口已接管）。非 systemd 编译版本使用 `Type=simple` 即可。
+
+### 启动
+
+```bash
+systemctl enable --now gatekeeper
+systemctl status gatekeeper    # 查看状态
+journalctl -u gatekeeper       # 查看日志
 ```
 
 ## 工作原理
@@ -251,4 +298,7 @@ cat > my-config.json << 'CFG'
 }
 CFG
 ./gatekeeper my-config.json
+
+# stdin 管道（适用于动态生成配置）
+echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
 ```
