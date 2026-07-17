@@ -1,12 +1,12 @@
 {
   "ports": [
     {
-      "name": "hackfight",
+      "name": "9router",
       "enabled": true,
-      "listen": ":3000",
-      "command": "/usr/local/bin/start-hackfight.sh",
+      "listen": ":20128",
+      "command": "node /home/user/.nvm/versions/node/v24.16.0/lib/node_modules/9router/cli.js start --host 0.0.0.0 -p 20128 --skip-update --no-browser",
       "delay": 30000,
-      "refresh_seconds": 3,
+      "refresh_seconds": 15,
       "auto_restart": true
     }
   ]
