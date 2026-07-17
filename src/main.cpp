@@ -69,6 +69,17 @@ static void monitorLoop() {
                       << (active ? "" : " (idle)")
                       << std::endl;
         }
+        // 空闲检测：检查每个端口的活跃状态，空闲超过配置时间则关闭后端
+        for (auto& r : g_relays) {
+            if (!r->monitorEnabled()) continue;
+            if (!r->isBackendRunning()) continue;
+            int idleMin = r->idleMinutes();
+            if (r->hasRecentActivity(idleMin)) continue;
+            std::cout << "  [" << r->name() << "] 已空闲 " << idleMin
+                      << " 分钟，关闭后端" << std::endl;
+            if (auto* g = r->group()) g->resetLaunch();
+            r->gracefulStop();
+        }
 
         // 逐秒等待，可响应 g_stop
         for (int i = 0; i < interval && !g_stop.load(); i++) {
