@@ -26,12 +26,13 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
 
         // simple 模式 / mixed+hold_port=false：必须提供 command
         // mixed+hold_port=true：command 可选，每个 protocol 自带 command
-        if (!l || (!c && !(mode == "mixed" && holdPort))) {
+        if (!l || (!c && !(mode == "mixed" && holdPort) && mode != "proxy")) {
             std::cerr << "警告: 端口[" << i << "] 配置不完整，跳过\n"; continue;
         }
 
         PortConfig cfg;
         cfg.name = entry->get("name") ? entry->get("name")->as_str() : "";
+        if (auto* g = entry->get("group")) cfg.groupName = g->as_str();
         if (auto* e = entry->get("enabled")) cfg.enabled = e->as_bool();
         if (!cfg.enabled) {
             std::string label = cfg.name.empty() ? l->as_str() : cfg.name;

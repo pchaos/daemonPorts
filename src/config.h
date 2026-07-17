@@ -28,6 +28,7 @@ struct MonitorConfig {
 
 struct PortConfig {
     std::string name;
+    std::string groupName; // optional group identifier, default empty
     bool        enabled = true;
     std::string listenAddr;
     std::string command;            // simple 模式 / mixed+hold_port=false 模式使用
