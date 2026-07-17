@@ -868,7 +868,11 @@ PortRelay::BackendState* PortRelay::findBackend(const std::string&) { return nul
 void PortRelay::proxyMonitorLoop() {}
 void PortRelay::socks5ListenLoop() {}
 void PortRelay::mixedListenLoop() {}
-void PortRelay::createThread(ThreadHandle&, void* (*)(void*), void*) {}
+void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* arg) {
+    (void)thread;
+    (void)func;
+    (void)arg;
+}
 void PortRelay::start() {}
 void PortRelay::stop() { stop_.store(true); }
 

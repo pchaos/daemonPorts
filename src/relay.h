@@ -13,8 +13,8 @@
 
 #ifdef _WIN32
 #include <cstdint>
-using ProcessId = uint32_t;
-using ThreadHandle = std::thread*;
+using ProcessId = unsigned long;
+using ThreadHandle = std::uintptr_t;
 #else
 #include <sys/types.h>
 #include <pthread.h>
