@@ -104,3 +104,56 @@ TEST_CASE("PortGroup - 无组 relay 行为不变") {
     // Just verify it can be constructed and destroyed without crash
     CHECK(r.backendPid_ == 0);
 }
+
+TEST_CASE("PortGroup - resetLaunch 重置启动状态") {
+
+    PortConfig cfg;
+    cfg.name = "relay";
+    cfg.listenAddr = "127.0.0.1:0";
+    cfg.command = "true";
+    cfg.delayMs = 0;
+    cfg.refreshSeconds = 0;
+    cfg.retrySeconds = 1;
+    cfg.maxRetrySeconds = 1;
+    cfg.autoRestart = false;
+    cfg.stackSize = 256;
+    cfg.mode = "simple";
+    cfg.holdPort = false;
+
+    PortRelay r(cfg);
+    PortGroup group("testgroup");
+    group.addRelay(&r);
+
+    group.onConnection(&r);
+    CHECK(group.isLaunched() == true);
+
+    group.resetLaunch();
+    CHECK(group.isLaunched() == false);
+    CHECK(group.isRunning() == false);
+}
+
+TEST_CASE("PortGroup - resetLaunch 后可以再次启动") {
+    PortConfig cfg;
+    cfg.name = "relay";
+    cfg.listenAddr = "127.0.0.1:0";
+    cfg.command = "true";
+    cfg.delayMs = 0;
+    cfg.refreshSeconds = 0;
+    cfg.retrySeconds = 1;
+    cfg.maxRetrySeconds = 1;
+    cfg.autoRestart = false;
+    cfg.stackSize = 256;
+    cfg.mode = "simple";
+    cfg.holdPort = false;
+
+    PortRelay r(cfg);
+    PortGroup group("testgroup");
+    group.addRelay(&r);
+    group.onConnection(&r);
+    CHECK(group.isLaunched() == true);
+    group.resetLaunch();
+    CHECK(group.isLaunched() == false);
+
+    group.onConnection(&r);
+    CHECK(group.isLaunched() == true);
+}

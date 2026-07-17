@@ -22,6 +22,7 @@ public:
 
     // Stop the whole group and all its relays
     void stop();
+    void resetLaunch();
 
     bool isLaunched() const { return launched_.load(); }
     bool isRunning() const { return running_.load(); }

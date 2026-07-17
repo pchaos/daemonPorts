@@ -49,5 +49,11 @@ void PortGroup::stop() {
     r->stop();
   }
   launched_ = false;
-  running_ = false;
+    running_ = false;
+}
+
+void PortGroup::resetLaunch() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    launched_ = false;
+    running_ = false;
 }
