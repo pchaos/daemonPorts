@@ -29,6 +29,8 @@ class PortRelay {
     // 混合模式字段
     std::string mode_;
     bool holdPort_;
+    std::string stopCommand_;    // 优雅关闭命令
+    int idleMinutes_ = 20;       // 空闲超时分钟数
     std::vector<ProtocolConfig> protocols_;
 
     // proxy 模式字段
@@ -112,6 +114,11 @@ public:
 
     void start();
     void stop();
+
+    void gracefulStop();
+    bool isBackendRunning() const { return backendPid_ > 0; }
+    PortGroup* group() const { return group_; }
+    int idleMinutes() const { return idleMinutes_; }
 
     const std::string& name() const { return name_; }
 
