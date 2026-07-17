@@ -217,7 +217,32 @@ TEST_CASE("parseConfig - proxy 模式: userpass 认证") {
                     "type": "userpass",
                     "username": "admin",
                     "password": "secret123"
-                }
+}
+TEST_CASE("parseConfig - stop_command and idle_minutes present") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":6000",
+                "command": "./app",
+                "stop_command": "kill -9 $PID",
+                "idle_minutes": 10
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].stopCommand == "kill -9 $PID");
+    CHECK(cfgs[0].idleMinutes == 10);
+}
+TEST_CASE("parseConfig - stop_command and idle_minutes defaults") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":6001", "command": "./app" }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].stopCommand.empty());
+    CHECK(cfgs[0].idleMinutes == 20);
+}
             }
         ]
     })");
