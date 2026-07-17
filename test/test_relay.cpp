@@ -124,3 +124,44 @@ TEST_CASE("hasRecentActivity - 当前活跃") {
     // 时间戳为 0 时，任何分钟数都不应该认为活跃
     CHECK(relay.hasRecentActivity(0) == false);
 }
+
+TEST_CASE("gracefulStop - backendPid_ <= 0 不做任何事") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 5;
+    cfg.stopCommand = "echo stop";
+    cfg.idleMinutes = 10;
+    PortRelay relay(cfg);
+    relay.gracefulStop();
+    CHECK(relay.isBackendRunning() == false);
+}
+
+TEST_CASE("idleMinutes - 构造函数正确初始化") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 5;
+    cfg.idleMinutes = 7;
+    PortRelay relay(cfg);
+    CHECK(relay.idleMinutes() == 7);
+
+    cfg.idleMinutes = 0;
+    PortRelay relay2(cfg);
+    CHECK(relay2.idleMinutes() == 20);
+}
+
+TEST_CASE("gracefulStop - backendPid_ > 0 clears pid") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 5;
+    cfg.stopCommand = ""; // no stop command
+    cfg.idleMinutes = 5;
+    PortRelay relay(cfg);
+    relay.backendPid_ = 12345; // simulate running backend
+    relay.gracefulStop();
+    CHECK(relay.backendPid_ == 0);
+}
+
+}

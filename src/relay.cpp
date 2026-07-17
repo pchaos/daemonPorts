@@ -47,7 +47,9 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , auth_(cfg.auth)
     , httpTarget_(cfg.httpTarget)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
-    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
+    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0)
+    , stopCommand_(cfg.stopCommand)
+    , idleMinutes_(cfg.idleMinutes > 0 ? cfg.idleMinutes : 20) {}
 
 int PortRelay::createListener() {
     sockaddr_in sa;
@@ -842,6 +844,32 @@ void PortRelay::stop() {
     if (listenThread_) pthread_join(listenThread_, nullptr);
     if (monitorThread_) pthread_join(monitorThread_, nullptr);
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
+}
+
+// Graceful stop implementation
+void PortRelay::gracefulStop() {
+    if (backendPid_ <= 0) return;
+    std::cout << "  [" << name_ << "] 正在关闭后端 (PID=" << backendPid_ << ")" << std::endl;
+    if (!stopCommand_.empty()) {
+        std::cout << "  [" << name_ << "] 执行关闭命令: " << stopCommand_ << std::endl;
+        system(stopCommand_.c_str());
+        for (int i = 0; i < 30; ++i) {
+            if (backendPid_ == 0) return; // monitorBackend may have cleared it
+            int status;
+            pid_t ret = waitpid(backendPid_, &status, WNOHANG);
+            if (ret == backendPid_) {
+                std::cout << "  [" << name_ << "] 后端已退出 (status=" << status << ")" << std::endl;
+                backendPid_ = 0;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::cout << "  [" << name_ << "] 关闭命令超时，发送 SIGTERM" << std::endl;
+    }
+    // Fallback SIGTERM
+    kill(backendPid_, SIGTERM);
+    std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
+    backendPid_ = 0;
 }
 
 // Group coordination implementations
