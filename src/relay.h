@@ -12,7 +12,10 @@
 #include <ctime>
 #include <pthread.h>
 
+class PortGroup; // forward declaration for grouping
+
 class PortRelay {
+    friend class PortGroup;
     std::string name_;
     std::string listenAddr_;
     std::string command_;
@@ -32,7 +35,11 @@ class PortRelay {
     AuthConfig  auth_;
     std::string httpTarget_;
 
-    int listenFd_ = -1;
+    std::atomic<int> listenFd_{-1};
+    // Group coordination members
+    PortGroup* group_{nullptr};
+    std::atomic<bool> groupReleased_{false};
+    public:
     pid_t backendPid_ = 0;
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
@@ -96,6 +103,10 @@ class PortRelay {
 
 public:
     PortRelay(const PortConfig& cfg);
+    // Group coordination methods
+    void setGroup(PortGroup* g);
+    void forceReleasePort();
+    void clearGroupLaunch();
 
     std::string buildStartupResponse() const;
 
