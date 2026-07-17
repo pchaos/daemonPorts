@@ -13,7 +13,8 @@
 #ifndef _WIN32
 #  include <pthread.h>
 #else
-   // Windows: provide stub types so the class definition compiles
+   // Windows: minimal stub types to allow the class definition to compile.
+   // The relay functionality requires POSIX and is not available on Windows.
    using pthread_t = void*;
    using pid_t = int;
 #endif

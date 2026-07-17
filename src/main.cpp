@@ -8,7 +8,8 @@
 #  include <netinet/tcp.h>
 #  include <unistd.h>
 #else
-   // TCP_LISTEN is Linux kernel state value 10
+   // TCP_LISTEN is a standard TCP state constant (value 10) from the TCP
+   // protocol specification; defined on POSIX systems via <netinet/tcp.h>.
 #  ifndef TCP_LISTEN
 #  define TCP_LISTEN 10
 #  endif

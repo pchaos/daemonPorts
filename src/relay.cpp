@@ -835,7 +835,9 @@ std::string PortRelay::buildStartupResponse() const { return ""; }
 bool        PortRelay::hasRecentActivity(int) const  { return false; }
 void        PortRelay::updateActivity(bool)           {}
 int         PortRelay::monitorPort() const            { return 0; }
-void        PortRelay::start()                        {}
-void        PortRelay::stop()                         {}
+void        PortRelay::start() {
+    std::cerr << "  [" << name_ << "] relay not supported on Windows\n";
+}
+void        PortRelay::stop()  {}
 
 #endif // _WIN32
