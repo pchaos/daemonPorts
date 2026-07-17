@@ -46,8 +46,8 @@ class PortRelay {
     ProcessId backendPid_ = 0;
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
-    ThreadHandle listenThread_{};
-    ThreadHandle monitorThread_{};
+    ThreadHandle listenThread_ = 0;
+    ThreadHandle monitorThread_ = 0;
 
     // hold_port=true 时：每个协议的后端状态
     struct BackendState {
@@ -68,7 +68,7 @@ class PortRelay {
         BackendState& operator=(const BackendState&) = delete;
     };
     std::vector<BackendState> backends_;
-    ThreadHandle proxyMonitorThread_{};
+    ThreadHandle proxyMonitorThread_ = 0;
 
     // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
     int tcpMonitorInterval_ = 0;

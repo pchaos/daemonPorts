@@ -869,6 +869,7 @@ void PortRelay::proxyMonitorLoop() {}
 void PortRelay::socks5ListenLoop() {}
 void PortRelay::mixedListenLoop() {}
 void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* arg) {
+    // Windows 占位实现：当前不创建后台线程，仅保留接口以通过编译。
     (void)thread;
     (void)func;
     (void)arg;
