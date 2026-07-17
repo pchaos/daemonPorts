@@ -10,7 +10,13 @@
 #include <vector>
 #include <chrono>
 #include <ctime>
-#include <pthread.h>
+#ifndef _WIN32
+#  include <pthread.h>
+#else
+   // Windows: provide stub types so the class definition compiles
+   using pthread_t = void*;
+   using pid_t = int;
+#endif
 
 class PortRelay {
     std::string name_;

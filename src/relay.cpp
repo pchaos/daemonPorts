@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cstring>
+#ifndef _WIN32
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -11,24 +12,9 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <netdb.h>
+#endif
 #include <ctime>
 #include <errno.h>
-
-static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
-    auto c = addr.find(':');
-    if (c == std::string::npos) return false;
-    std::string host = addr.substr(0, c);
-    int port = std::stoi(addr.substr(c+1));
-    if (port <= 0 || port > 65535) return false;
-
-    memset(&out, 0, sizeof(out));
-    out.sin_family = AF_INET;
-    out.sin_port = htons(port);
-    if (host.empty() || host == "0.0.0.0") out.sin_addr.s_addr = INADDR_ANY;
-    else if (host == "localhost" || host == "127.0.0.1") out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    else inet_pton(AF_INET, host.c_str(), &out.sin_addr);
-    return true;
-}
 
 PortRelay::PortRelay(const PortConfig& cfg)
     : name_(cfg.name.empty() ? cfg.listenAddr : cfg.name)
@@ -47,6 +33,24 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , httpTarget_(cfg.httpTarget)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
+
+#ifndef _WIN32
+
+static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
+    auto c = addr.find(':');
+    if (c == std::string::npos) return false;
+    std::string host = addr.substr(0, c);
+    int port = std::stoi(addr.substr(c+1));
+    if (port <= 0 || port > 65535) return false;
+
+    memset(&out, 0, sizeof(out));
+    out.sin_family = AF_INET;
+    out.sin_port = htons(port);
+    if (host.empty() || host == "0.0.0.0") out.sin_addr.s_addr = INADDR_ANY;
+    else if (host == "localhost" || host == "127.0.0.1") out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    else inet_pton(AF_INET, host.c_str(), &out.sin_addr);
+    return true;
+}
 
 int PortRelay::createListener() {
     sockaddr_in sa;
@@ -821,3 +825,17 @@ void PortRelay::stop() {
     if (monitorThread_) pthread_join(monitorThread_, nullptr);
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
 }
+
+#else // _WIN32
+
+// ── Windows stubs: the relay functionality requires POSIX and is not
+//    available on Windows. The binary will compile but is non-functional.
+
+std::string PortRelay::buildStartupResponse() const { return ""; }
+bool        PortRelay::hasRecentActivity(int) const  { return false; }
+void        PortRelay::updateActivity(bool)           {}
+int         PortRelay::monitorPort() const            { return 0; }
+void        PortRelay::start()                        {}
+void        PortRelay::stop()                         {}
+
+#endif // _WIN32
