@@ -10,7 +10,48 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>   // memcpy
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>  // in6_addr, ntohs, sockaddr_in
+#include <netinet/tcp.h>
+#endif
+
+#ifndef TCP_ESTABLISHED
+#define TCP_ESTABLISHED 1
+#endif
+#ifndef TCP_SYN_SENT
+#define TCP_SYN_SENT 2
+#endif
+#ifndef TCP_SYN_RECV
+#define TCP_SYN_RECV 3
+#endif
+#ifndef TCP_FIN_WAIT1
+#define TCP_FIN_WAIT1 4
+#endif
+#ifndef TCP_FIN_WAIT2
+#define TCP_FIN_WAIT2 5
+#endif
+#ifndef TCP_TIME_WAIT
+#define TCP_TIME_WAIT 6
+#endif
+#ifndef TCP_CLOSE
+#define TCP_CLOSE 7
+#endif
+#ifndef TCP_CLOSE_WAIT
+#define TCP_CLOSE_WAIT 8
+#endif
+#ifndef TCP_LAST_ACK
+#define TCP_LAST_ACK 9
+#endif
+#ifndef TCP_LISTEN
+#define TCP_LISTEN 10
+#endif
+#ifndef TCP_CLOSING
+#define TCP_CLOSING 11
+#endif
 
 // ── 一条 TCP 连接信息 ──
 struct TcpConnEntry {

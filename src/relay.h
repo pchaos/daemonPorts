@@ -10,7 +10,17 @@
 #include <vector>
 #include <chrono>
 #include <ctime>
+
+#ifdef _WIN32
+#include <cstdint>
+using ProcessId = intptr_t;
+using ThreadHandle = std::thread*;
+#else
+#include <sys/types.h>
 #include <pthread.h>
+using ProcessId = pid_t;
+using ThreadHandle = pthread_t;
+#endif
 
 class PortRelay {
     std::string name_;
@@ -33,11 +43,11 @@ class PortRelay {
     std::string httpTarget_;
 
     int listenFd_ = -1;
-    pid_t backendPid_ = 0;
+    ProcessId backendPid_ = 0;
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
-    pthread_t listenThread_ = 0;
-    pthread_t monitorThread_ = 0;
+    ThreadHandle listenThread_{};
+    ThreadHandle monitorThread_{};
 
     // hold_port=true 时：每个协议的后端状态
     struct BackendState {
@@ -46,7 +56,7 @@ class PortRelay {
         std::string proxyTo;
         int delayMs = 5000;
 
-        pid_t pid = 0;
+        ProcessId pid = 0;
         // 用 unique_ptr 包装 atomic，使 struct 可 move（vector 要求）
         std::unique_ptr<std::atomic<bool>> ready{new std::atomic<bool>(false)};
         std::unique_ptr<std::atomic<bool>> stopping{new std::atomic<bool>(false)};
@@ -58,7 +68,7 @@ class PortRelay {
         BackendState& operator=(const BackendState&) = delete;
     };
     std::vector<BackendState> backends_;
-    pthread_t proxyMonitorThread_ = 0;
+    ThreadHandle proxyMonitorThread_{};
 
     // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
     int tcpMonitorInterval_ = 0;
@@ -67,11 +77,11 @@ class PortRelay {
     time_t lastActiveTime_ = 0;
 
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
-    void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
+    void createThread(ThreadHandle& thread, void* (*func)(void*), void* arg);
 
     // 通用的
     int createListener();
-    pid_t launchBackend();
+    ProcessId launchBackend();
     bool waitForBackend(int ms);
     void sendStartupPage(int fd);
     void monitorBackend();

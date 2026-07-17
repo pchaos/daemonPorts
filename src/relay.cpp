@@ -1,5 +1,7 @@
 #include "relay.h"
 
+#ifndef _WIN32
+
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
@@ -65,7 +67,7 @@ int PortRelay::createListener() {
     return fd;
 }
 
-pid_t PortRelay::launchBackend() {
+ProcessId PortRelay::launchBackend() {
     pid_t pid = fork();
     if (pid < 0) { perror("fork"); return -1; }
     if (pid == 0) {
@@ -760,7 +762,7 @@ void PortRelay::mixedListenLoop() {
     }
 }
 
-void PortRelay::createThread(pthread_t& thread, void* (*func)(void*), void* arg) {
+void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* arg) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, stackSize_ * 1024);
@@ -821,3 +823,50 @@ void PortRelay::stop() {
     if (monitorThread_) pthread_join(monitorThread_, nullptr);
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
 }
+
+#else
+
+#include <iostream>
+
+PortRelay::PortRelay(const PortConfig& cfg)
+    : name_(cfg.name.empty() ? cfg.listenAddr : cfg.name)
+    , listenAddr_(cfg.listenAddr)
+    , command_(cfg.command)
+    , delayMs_(cfg.delayMs)
+    , refreshSeconds_(cfg.refreshSeconds)
+    , retrySeconds_(cfg.retrySeconds)
+    , retrySecondsBase_(cfg.retrySeconds)
+    , retrySecondsMax_(cfg.maxRetrySeconds)
+    , autoRestart_(cfg.autoRestart)
+    , mode_(cfg.mode)
+    , holdPort_(cfg.holdPort)
+    , protocols_(cfg.protocols)
+    , auth_(cfg.auth)
+    , httpTarget_(cfg.httpTarget)
+    , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
+    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
+
+int PortRelay::createListener() { return -1; }
+ProcessId PortRelay::launchBackend() { return -1; }
+bool PortRelay::waitForBackend(int) { return false; }
+void PortRelay::sendStartupPage(int) {}
+void PortRelay::monitorBackend() {}
+void PortRelay::listenLoop() {}
+std::string PortRelay::buildStartupResponse() const { return std::string(); }
+bool PortRelay::hasRecentActivity(int) const { return false; }
+int PortRelay::monitorPort() const { return -1; }
+void PortRelay::updateActivity(bool) {}
+std::string PortRelay::detectProtocol(int) { return "unknown"; }
+void PortRelay::sendMixedResponse(int, const std::string&) {}
+int PortRelay::connectToBackend(const std::string&) { return -1; }
+void PortRelay::proxyConnection(int, const std::string&) {}
+void PortRelay::launchProtocolBackend(BackendState&) {}
+PortRelay::BackendState* PortRelay::findBackend(const std::string&) { return nullptr; }
+void PortRelay::proxyMonitorLoop() {}
+void PortRelay::socks5ListenLoop() {}
+void PortRelay::mixedListenLoop() {}
+void PortRelay::createThread(ThreadHandle&, void* (*)(void*), void*) {}
+void PortRelay::start() {}
+void PortRelay::stop() { stop_.store(true); }
+
+#endif
