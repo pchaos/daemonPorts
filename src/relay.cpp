@@ -828,6 +828,9 @@ void PortRelay::stop() {
 
 #include <iostream>
 
+// Windows/MSVC 构建当前只提供最小占位实现，以便 CI 能验证跨平台编译。
+// 这些实现不会启动后端或监听端口；完整的 Windows 运行时支持后续再补齐。
+
 PortRelay::PortRelay(const PortConfig& cfg)
     : name_(cfg.name.empty() ? cfg.listenAddr : cfg.name)
     , listenAddr_(cfg.listenAddr)
@@ -847,7 +850,7 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
 
 int PortRelay::createListener() { return -1; }
-ProcessId PortRelay::launchBackend() { return -1; }
+ProcessId PortRelay::launchBackend() { return 0; }
 bool PortRelay::waitForBackend(int) { return false; }
 void PortRelay::sendStartupPage(int) {}
 void PortRelay::monitorBackend() {}
