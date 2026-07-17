@@ -67,6 +67,58 @@ target("gatekeeper")
         print("✅ 构建完成: " .. path.join(output_dir, target:filename()))
     end)
 
+-- ── 带 systemd 的版本（始终链接 libsystemd，输出 gatekeeper-systemd）──
+target("gatekeeper-systemd")
+    set_kind("binary")
+    set_languages("c++11")
+    add_files("src/*.cpp")
+    add_includedirs("src")
+
+    -- ── 始终启用 systemd ────────────────────────────────────
+    add_defines("HAVE_SYSTEMD")
+    if is_plat("linux") then
+        add_syslinks("systemd")
+    end
+
+    -- ── POSIX 平台 ──────────────────────────────────────────
+    if is_plat("linux", "macosx", "bsd") then
+        add_syslinks("pthread")
+    end
+
+    -- ── Windows (MinGW / MSVC) ──────────────────────────────
+    if is_plat("windows") then
+        add_syslinks("ws2_32")
+    end
+
+    -- ── 编译器标志 ──────────────────────────────────────────
+    if is_plat("linux", "macosx", "bsd") then
+        add_cxxflags("-Wall", "-Wextra", "-Wpedantic")
+    end
+
+    -- ── 发布模式 ────────────────────────────────────────────
+    if is_mode("release") then
+        set_optimize("fastest")
+        set_symbols("hidden")
+        set_strip("all")
+    end
+
+    -- ── 调试模式 ────────────────────────────────────────────
+    if is_mode("debug") then
+        set_symbols("debug")
+        set_optimize("none")
+    end
+
+    -- ── 安装到 build/<平台>/<架构>/ ─────────────────────────
+    after_build(function(target)
+        import("core.project.config")
+        local plat  = config.get("plat") or "native"
+        local arch  = config.get("arch") or os.arch()
+        local output_dir = path.join(os.projectdir(), "build", plat, arch)
+        os.mkdir(output_dir)
+        os.cp(target:targetfile(), path.join(output_dir, target:filename()))
+        print("✅ 构建完成: " .. path.join(output_dir, target:filename()))
+    end)
+
 target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
