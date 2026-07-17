@@ -7,11 +7,26 @@ set_xmakever("2.8.0")
 
 add_rules("mode.debug", "mode.release")
 
+-- ── systemd 集成选项 ───────────────────────────
+option("HAVE_SYSTEMD")
+    set_default(false)
+    add_defines("HAVE_SYSTEMD")
+    set_description("启用 systemd sd_notify 支持（编译 -DHAVE_SYSTEMD，链接 libsystemd）")
+    set_category("features")
+
 target("gatekeeper")
     set_kind("binary")
     set_languages("c++11")
     add_files("src/*.cpp")
     add_includedirs("src")
+
+    -- ── systemd 集成（需要 -DHAVE_SYSTEMD + -lsystemd）─────
+    if has_config("HAVE_SYSTEMD") then
+        add_defines("HAVE_SYSTEMD")
+        if is_plat("linux") then
+            add_syslinks("systemd")
+        end
+    end
 
     -- ── POSIX 平台 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
@@ -55,13 +70,21 @@ target("gatekeeper")
 target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
-    add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_tcp_monitor.cpp")
-    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp")
+    add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp")
+    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp")
     add_includedirs("test", "src")
 
     -- ── POSIX 平台 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
         add_syslinks("pthread")
+    end
+
+    -- ── systemd 集成 ──────────────────────────────────────────
+    if has_config("HAVE_SYSTEMD") then
+        add_defines("HAVE_SYSTEMD")
+        if is_plat("linux") then
+            add_syslinks("systemd")
+        end
     end
 
     -- ── 仅用于调试模式 ──────────────────────────────────────
