@@ -178,18 +178,10 @@ jobs:
           path: build/windows/${{ matrix.arch }}/*
 
   # ═══════════════════════════════════════════════════════════════════
-  # macOS (x86_64 + arm64) ── 原生构建
+  # macOS (arm64) ── 原生构建（Apple Silicon）
   # ═══════════════════════════════════════════════════════════════════
   macos:
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: macos-latest    # Intel macOS (via Rosetta 2)
-          - arch: arm64
-            runner: macos-latest    # Apple Silicon
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -198,16 +190,16 @@ jobs:
         with:
           xmake-version: latest
 
-      - name: Configure & Build (release)
+      - name: Configure & Build (release, arm64)
         run: |
-          xmake f -p macosx -a ${{ matrix.arch }} -m release -y
+          xmake f -p macosx -a arm64 -m release -y
           xmake
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gatekeeper-macosx-${{ matrix.arch }}
-          path: build/macosx/${{ matrix.arch }}/*
+          name: gatekeeper-macosx-arm64
+          path: build/macosx/arm64/*
 
   # ═══════════════════════════════════════════════════════════════════
   # Debug 测试 (Linux amd64)
