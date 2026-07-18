@@ -65,7 +65,7 @@ jobs:
       - name: Configure & Build (release, arm64)
         run: |
           xmake f -p linux -a arm64 -m release \
-            --toolchain=aarch64-linux-gnu- \
+            --cross=aarch64-linux-gnu- \
             -y
           xmake
 
