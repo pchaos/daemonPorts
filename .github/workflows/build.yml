@@ -65,7 +65,7 @@ jobs:
       - name: Configure & Build (release, arm64)
         run: |
           xmake f -p linux -a arm64 -m release \
-            --toolchain=aarch64-linux-gnu- \
+            --cross=aarch64-linux-gnu- \
             -y
           xmake
 
@@ -99,7 +99,7 @@ jobs:
       - name: Configure & Build (release, i386)
         run: |
           xmake f -p linux -a i386 -m release \
-            --toolchain=i686-linux-gnu- \
+            --cross=i686-linux-gnu- \
             -y
           xmake
 
