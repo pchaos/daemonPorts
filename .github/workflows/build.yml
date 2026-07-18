@@ -30,6 +30,11 @@ jobs:
         with:
           xmake-version: latest
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsystemd-dev
+
       - name: Configure & Build (release)
         run: |
           xmake f -p linux -a x86_64 -m release -y
@@ -222,6 +227,11 @@ jobs:
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: latest
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsystemd-dev
 
       - name: Configure & Build (debug) — runs tests automatically
         run: |
