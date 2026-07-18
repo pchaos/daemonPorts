@@ -1,6 +1,8 @@
 #include "config.h"
 #include "relay.h"
 #include "tcp_monitor.h"
+#include "port_group.h"
+#include <map>
 
 #include <iostream>
 #include <memory>
@@ -15,6 +17,8 @@
 #include <unistd.h>
 #endif
 
+static std::vector<std::unique_ptr<PortGroup>> g_groups;
+
 // systemd sd_notify 支持（编译时添加 -DHAVE_SYSTEMD 启用）
 #ifdef HAVE_SYSTEMD
 #include <systemd/sd-daemon.h>
@@ -28,6 +32,11 @@ static std::atomic<bool> g_stop{false};
 
 static void handleSignal(int) {
     g_stop.store(true);
+    // Stop all groups first
+    for (auto& g : g_groups) {
+        if (g) g->stop();
+    }
+    // Then stop any remaining relays (non‑grouped or already stopped)
     for (auto& r : g_relays) r->stop();
 }
 
@@ -62,6 +71,17 @@ static void monitorLoop() {
                       << "  non-listen=" << nonListen
                       << (active ? "" : " (idle)")
                       << std::endl;
+        }
+        // 空闲检测：检查每个端口的活跃状态，空闲超过配置时间则关闭后端
+        for (auto& r : g_relays) {
+            if (!r->monitorEnabled()) continue;
+            if (!r->isBackendRunning()) continue;
+            int idleMin = r->idleMinutes();
+            if (r->hasRecentActivity(idleMin)) continue;
+            std::cout << "  [" << r->name() << "] 已空闲 " << idleMin
+                      << " 分钟，关闭后端" << std::endl;
+            if (auto* g = r->group()) g->resetLaunch();
+            r->gracefulStop();
         }
 
         // 逐秒等待，可响应 g_stop
@@ -99,13 +119,47 @@ int main(int argc, char* argv[]) {
 
     std::cout << "门卫程序启动，管理 " << cfgs.size() << " 个端口:" << std::endl;
     bool anyMonitor = false;
+    struct RelayInfo { PortRelay* relay; const PortConfig* cfg; };
+    std::map<std::string, std::vector<RelayInfo>> groupMap; 
     for (auto& c : cfgs) {
         std::cout << "  " << c.listenAddr << " -> \"" << c.command << "\"" << std::endl;
         if (c.monitor.enabled) anyMonitor = true;
-        auto relay = std::unique_ptr<PortRelay>(new PortRelay(c));
-        relay->start();
-        g_relays.push_back(std::move(relay));
+        auto relayPtr = std::unique_ptr<PortRelay>(new PortRelay(c));
+        PortRelay* rawPtr = relayPtr.get();
+        g_relays.push_back(std::move(relayPtr));
+        if (!c.groupName.empty()) {
+            groupMap[c.groupName].push_back({rawPtr, &c});
+        }
     }
+
+    for (auto& kv : groupMap) {
+        const std::string& name = kv.first;
+        auto& infos = kv.second;
+        const std::string& mode = infos.front().cfg->mode;
+        const std::string& command = infos.front().cfg->command;
+        for (auto& info : infos) {
+            if (info.cfg->mode != mode) {
+                std::cerr << "错误: 组 '" << name << "' 中的端口模式不一致" << std::endl;
+                return 1;
+            }
+            if (info.cfg->command != command) {
+                std::cerr << "错误: 组 '" << name << "' 中的端口 command 不一致" << std::endl;
+                return 1;
+            }
+        }
+        if (mode != "simple") {
+            std::cerr << "错误: 仅支持 simple 模式的分组，组 '" << name << "' 使用 mode='" << mode << "'" << std::endl;
+            return 1;
+        }
+        auto groupPtr = std::unique_ptr<PortGroup>(new PortGroup(name));
+        for (auto& info : infos) {
+            groupPtr->addRelay(info.relay);
+            info.relay->setGroup(groupPtr.get());
+        }
+        g_groups.push_back(std::move(groupPtr));
+    }
+
+    for (auto& r : g_relays) r->start();
 
     // 启动统一 TCP 监控线程（如果有启用监控的端口）
     std::thread monitorThread;
@@ -127,6 +181,12 @@ int main(int argc, char* argv[]) {
 #endif
 
     std::cout << "门卫程序退出" << std::endl;
+    // Stop all groups before exiting (groups stop their relays)
+    for (auto& g : g_groups) {
+        if (g) g->stop();
+    }
+    // Ensure any remaining relays are stopped (non‑grouped)
+    for (auto& r : g_relays) r->stop();
     if (monitorThread.joinable()) monitorThread.join();
     return 0;
 }

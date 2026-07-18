@@ -28,9 +28,12 @@ struct MonitorConfig {
 
 struct PortConfig {
     std::string name;
+    std::string groupName; // optional group identifier, default empty
     bool        enabled = true;
     std::string listenAddr;
     std::string command;            // simple 模式 / mixed+hold_port=false 模式使用
+    std::string stopCommand;    // 优雅关闭命令（可选，空字符串时不使用）
+    int idleMinutes = 20;       // 空闲超时分钟数（默认 20 分钟）
     int         delayMs = 5000;
     int         refreshSeconds = 5;
     int         retrySeconds = 10;

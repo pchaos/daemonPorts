@@ -1,4 +1,5 @@
 #include "relay.h"
+#include "port_group.h"
 
 #ifndef _WIN32
 
@@ -48,7 +49,9 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , auth_(cfg.auth)
     , httpTarget_(cfg.httpTarget)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
-    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
+    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0)
+    , stopCommand_(cfg.stopCommand)
+    , idleMinutes_(cfg.idleMinutes > 0 ? cfg.idleMinutes : 20) {}
 
 int PortRelay::createListener() {
     sockaddr_in sa;
@@ -129,8 +132,12 @@ std::string PortRelay::buildStartupResponse() const {
 
 void PortRelay::listenLoop() {
     while (!stop_.load()) {
-        listenFd_ = createListener();
-        if (listenFd_ < 0) {
+        // If group has already released the port, stop listening
+        if (groupReleased_.load()) {
+            break;
+        }
+        listenFd_.store(createListener());
+        if (listenFd_.load() < 0) {
             if (!autoRestart_ || stop_.load()) break;
             std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
                       << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
@@ -150,7 +157,7 @@ void PortRelay::listenLoop() {
         while (!stop_.load()) {
             sockaddr_in cli;
             socklen_t len = sizeof(cli);
-            int fd = accept(listenFd_, (struct sockaddr*)&cli, &len);
+            int fd = accept(listenFd_.load(), (struct sockaddr*)&cli, &len);
             if (fd < 0) {
                 if (stop_.load() || errno == EINVAL) break;
                 continue;
@@ -159,14 +166,21 @@ void PortRelay::listenLoop() {
             sendStartupPage(fd);
             close(fd);
 
+            // Group coordination: notify group and let it handle backend launch
+            if (group_) {
+                group_->onConnection(this);
+                // After notifying group, stop this listen loop for this relay
+                break;
+            }
+
             if (backendPid_ == 0) {
                 pid_t pid = launchBackend();
                 if (pid < 0) break;
                 backendPid_ = pid;
                 std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
 
-                close(listenFd_);
-                listenFd_ = -1;
+                ::close(listenFd_.load());
+                listenFd_.store(-1);
                 std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                 if (!waitForBackend(delayMs_))
@@ -178,9 +192,9 @@ void PortRelay::listenLoop() {
             }
         }
 
-        if (listenFd_ >= 0) {
-            close(listenFd_);
-            listenFd_ = -1;
+        if (listenFd_.load() >= 0) {
+            ::close(listenFd_.load());
+            listenFd_.store(-1);
         }
 
         if (!autoRestart_ || stop_.load()) break;
@@ -655,8 +669,8 @@ void PortRelay::mixedListenLoop() {
 
     // 主循环（hold_port=true 和 hold_port=false 共用）
     while (!stop_.load()) {
-        listenFd_ = createListener();
-        if (listenFd_ < 0) {
+        listenFd_.store(createListener());
+        if (listenFd_.load() < 0) {
             if (!autoRestart_ || stop_.load()) break;
             std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
                       << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
@@ -730,8 +744,8 @@ void PortRelay::mixedListenLoop() {
                     std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")"
                               << std::endl;
 
-                    close(listenFd_);
-                    listenFd_ = -1;
+                    ::close(listenFd_.load());
+                    listenFd_.store(-1);
                     std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                     if (!waitForBackend(delayMs_))
@@ -804,16 +818,26 @@ void PortRelay::start() {
 }
 
 void PortRelay::stop() {
+    // Idempotent stop: if already stopping, do nothing
+    if (stop_.load()) {
+        return;
+    }
     stop_.store(true);
-    if (listenFd_ >= 0) {
-        ::close(listenFd_);
-        listenFd_ = -1;
+    // Close listening socket if open
+    if (listenFd_.load() >= 0) {
+        ::close(listenFd_.load());
+        listenFd_.store(-1);
     }
-    // 清理 simple / mixed+hold_port=false 的后端
+    // Clean up simple / mixed+hold_port=false backend
     if (backendPid_ > 0) {
-        kill(backendPid_, SIGTERM);
+        // Only send SIGTERM if the backend process is still alive
+        int status;
+        pid_t result = waitpid(backendPid_, &status, WNOHANG);
+        if (result == 0) { // still running
+            kill(backendPid_, SIGTERM);
+        }
     }
-    // 清理 mixed+hold_port=true 的多个后端
+    // Clean up mixed+hold_port=true multiple backends
     for (auto& b : backends_) {
         if (b.pid > 0) {
             kill(b.pid, SIGTERM);
@@ -822,6 +846,48 @@ void PortRelay::stop() {
     if (listenThread_) pthread_join(listenThread_, nullptr);
     if (monitorThread_) pthread_join(monitorThread_, nullptr);
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
+}
+
+// Graceful stop implementation
+void PortRelay::gracefulStop() {
+    if (backendPid_ <= 0) return;
+    std::cout << "  [" << name_ << "] 正在关闭后端 (PID=" << backendPid_ << ")" << std::endl;
+    if (!stopCommand_.empty()) {
+        std::cout << "  [" << name_ << "] 执行关闭命令: " << stopCommand_ << std::endl;
+        system(stopCommand_.c_str());
+        for (int i = 0; i < 30; ++i) {
+            if (backendPid_ == 0) return;
+            int status;
+            pid_t ret = waitpid(backendPid_, &status, WNOHANG);
+            if (ret == backendPid_) {
+                std::cout << "  [" << name_ << "] 后端已退出 (status=" << status << ")" << std::endl;
+                backendPid_ = 0;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::cout << "  [" << name_ << "] 关闭命令超时，发送 SIGTERM" << std::endl;
+    }
+
+    kill(backendPid_, SIGTERM);
+    std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
+    backendPid_ = 0;
+}
+
+void PortRelay::setGroup(PortGroup* g) {
+    group_ = g;
+}
+
+void PortRelay::forceReleasePort() {
+    groupReleased_.store(true);
+    if (listenFd_.load() >= 0) {
+        ::close(listenFd_.load());
+        listenFd_.store(-1);
+    }
+}
+
+void PortRelay::clearGroupLaunch() {
+    groupReleased_.store(false);
 }
 
 #else
@@ -843,6 +909,8 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , autoRestart_(cfg.autoRestart)
     , mode_(cfg.mode)
     , holdPort_(cfg.holdPort)
+    , stopCommand_(cfg.stopCommand)
+    , idleMinutes_(cfg.idleMinutes > 0 ? cfg.idleMinutes : 20)
     , protocols_(cfg.protocols)
     , auth_(cfg.auth)
     , httpTarget_(cfg.httpTarget)
@@ -875,6 +943,17 @@ void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* a
     (void)arg;
 }
 void PortRelay::start() {}
-void PortRelay::stop() { stop_.store(true); }
+void PortRelay::stop() {
+    stop_.store(true);
+    listenFd_.store(-1);
+    backendPid_ = 0;
+}
+void PortRelay::gracefulStop() { backendPid_ = 0; }
+void PortRelay::setGroup(PortGroup* g) { group_ = g; }
+void PortRelay::forceReleasePort() {
+    groupReleased_.store(true);
+    listenFd_.store(-1);
+}
+void PortRelay::clearGroupLaunch() { groupReleased_.store(false); }
 
 #endif

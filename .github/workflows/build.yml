@@ -191,7 +191,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-13       # Intel macOS
+            runner: macos-latest    # Intel macOS (via Rosetta 2)
           - arch: arm64
             runner: macos-latest    # Apple Silicon
     steps:

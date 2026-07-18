@@ -187,6 +187,7 @@ TEST_CASE("parseConfig - stack_size 自定义") {
     REQUIRE(cfgs.size() == 2);
     CHECK(cfgs[0].stackSize == 512);
     CHECK(cfgs[1].stackSize == 512);  // 默认值
+}
 
 TEST_CASE("parseConfig - proxy 模式: 无认证") {
     auto cfgs = parseConfig(R"({
@@ -216,7 +217,32 @@ TEST_CASE("parseConfig - proxy 模式: userpass 认证") {
                     "type": "userpass",
                     "username": "admin",
                     "password": "secret123"
-                }
+}
+TEST_CASE("parseConfig - stop_command and idle_minutes present") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":6000",
+                "command": "./app",
+                "stop_command": "kill -9 $PID",
+                "idle_minutes": 10
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].stopCommand == "kill -9 $PID");
+    CHECK(cfgs[0].idleMinutes == 10);
+}
+TEST_CASE("parseConfig - stop_command and idle_minutes defaults") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":6001", "command": "./app" }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].stopCommand.empty());
+    CHECK(cfgs[0].idleMinutes == 20);
+}
             }
         ]
     })");
@@ -226,6 +252,34 @@ TEST_CASE("parseConfig - proxy 模式: userpass 认证") {
     CHECK(cfgs[0].auth.username == "admin");
     CHECK(cfgs[0].auth.password == "secret123");
 }
+
+TEST_CASE("parseConfig - group field present") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":3000",
+                "command": "./a",
+                "group": "alpha"
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].groupName == "alpha");
+}
+
+TEST_CASE("parseConfig - group field absent") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            {
+                "listen": ":3000",
+                "command": "./a"
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].groupName.empty());
+}
+
 
 TEST_CASE("parseConfig - proxy 模式: http_target 配置") {
     auto cfgs = parseConfig(R"({
@@ -289,6 +343,4 @@ TEST_CASE("parseConfig - proxy 模式: auth 对象不完整时只取已有字段
     CHECK(cfgs[0].auth.type == "userpass");
     CHECK(cfgs[0].auth.username.empty());
     CHECK(cfgs[0].auth.password.empty());
-}
-
 }

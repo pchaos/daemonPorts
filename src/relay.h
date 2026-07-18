@@ -22,7 +22,10 @@ using ProcessId = pid_t;
 using ThreadHandle = pthread_t;
 #endif
 
+class PortGroup; // forward declaration for grouping
+
 class PortRelay {
+    friend class PortGroup;
     std::string name_;
     std::string listenAddr_;
     std::string command_;
@@ -36,13 +39,19 @@ class PortRelay {
     // 混合模式字段
     std::string mode_;
     bool holdPort_;
+    std::string stopCommand_;    // 优雅关闭命令
+    int idleMinutes_ = 20;       // 空闲超时分钟数
     std::vector<ProtocolConfig> protocols_;
 
     // proxy 模式字段
     AuthConfig  auth_;
     std::string httpTarget_;
 
-    int listenFd_ = -1;
+    std::atomic<int> listenFd_{-1};
+    // Group coordination members
+    PortGroup* group_{nullptr};
+    std::atomic<bool> groupReleased_{false};
+    public:
     ProcessId backendPid_ = 0;
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
@@ -106,11 +115,20 @@ class PortRelay {
 
 public:
     PortRelay(const PortConfig& cfg);
+    // Group coordination methods
+    void setGroup(PortGroup* g);
+    void forceReleasePort();
+    void clearGroupLaunch();
 
     std::string buildStartupResponse() const;
 
     void start();
     void stop();
+
+    void gracefulStop();
+    bool isBackendRunning() const { return backendPid_ > 0; }
+    PortGroup* group() const { return group_; }
+    int idleMinutes() const { return idleMinutes_; }
 
     const std::string& name() const { return name_; }
 
