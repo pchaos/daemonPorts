@@ -1,6 +1,8 @@
 #include "relay.h"
 #include "port_group.h"
 
+#ifndef _WIN32
+
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
@@ -68,7 +70,7 @@ int PortRelay::createListener() {
     return fd;
 }
 
-pid_t PortRelay::launchBackend() {
+ProcessId PortRelay::launchBackend() {
     pid_t pid = fork();
     if (pid < 0) { perror("fork"); return -1; }
     if (pid == 0) {
@@ -774,7 +776,7 @@ void PortRelay::mixedListenLoop() {
     }
 }
 
-void PortRelay::createThread(pthread_t& thread, void* (*func)(void*), void* arg) {
+void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* arg) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, stackSize_ * 1024);
@@ -854,7 +856,7 @@ void PortRelay::gracefulStop() {
         std::cout << "  [" << name_ << "] 执行关闭命令: " << stopCommand_ << std::endl;
         system(stopCommand_.c_str());
         for (int i = 0; i < 30; ++i) {
-            if (backendPid_ == 0) return; // monitorBackend may have cleared it
+            if (backendPid_ == 0) return;
             int status;
             pid_t ret = waitpid(backendPid_, &status, WNOHANG);
             if (ret == backendPid_) {
@@ -866,13 +868,12 @@ void PortRelay::gracefulStop() {
         }
         std::cout << "  [" << name_ << "] 关闭命令超时，发送 SIGTERM" << std::endl;
     }
-    // Fallback SIGTERM
+
     kill(backendPid_, SIGTERM);
     std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
     backendPid_ = 0;
 }
 
-// Group coordination implementations
 void PortRelay::setGroup(PortGroup* g) {
     group_ = g;
 }
@@ -888,3 +889,71 @@ void PortRelay::forceReleasePort() {
 void PortRelay::clearGroupLaunch() {
     groupReleased_.store(false);
 }
+
+#else
+
+#include <iostream>
+
+// Windows/MSVC 构建当前只提供最小占位实现，以便 CI 能验证跨平台编译。
+// 这些实现不会启动后端或监听端口；完整的 Windows 运行时支持后续再补齐。
+
+PortRelay::PortRelay(const PortConfig& cfg)
+    : name_(cfg.name.empty() ? cfg.listenAddr : cfg.name)
+    , listenAddr_(cfg.listenAddr)
+    , command_(cfg.command)
+    , delayMs_(cfg.delayMs)
+    , refreshSeconds_(cfg.refreshSeconds)
+    , retrySeconds_(cfg.retrySeconds)
+    , retrySecondsBase_(cfg.retrySeconds)
+    , retrySecondsMax_(cfg.maxRetrySeconds)
+    , autoRestart_(cfg.autoRestart)
+    , mode_(cfg.mode)
+    , holdPort_(cfg.holdPort)
+    , stopCommand_(cfg.stopCommand)
+    , idleMinutes_(cfg.idleMinutes > 0 ? cfg.idleMinutes : 20)
+    , protocols_(cfg.protocols)
+    , auth_(cfg.auth)
+    , httpTarget_(cfg.httpTarget)
+    , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
+    , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0) {}
+
+int PortRelay::createListener() { return -1; }
+ProcessId PortRelay::launchBackend() { return 0; }
+bool PortRelay::waitForBackend(int) { return false; }
+void PortRelay::sendStartupPage(int) {}
+void PortRelay::monitorBackend() {}
+void PortRelay::listenLoop() {}
+std::string PortRelay::buildStartupResponse() const { return std::string(); }
+bool PortRelay::hasRecentActivity(int) const { return false; }
+int PortRelay::monitorPort() const { return -1; }
+void PortRelay::updateActivity(bool) {}
+std::string PortRelay::detectProtocol(int) { return "unknown"; }
+void PortRelay::sendMixedResponse(int, const std::string&) {}
+int PortRelay::connectToBackend(const std::string&) { return -1; }
+void PortRelay::proxyConnection(int, const std::string&) {}
+void PortRelay::launchProtocolBackend(BackendState&) {}
+PortRelay::BackendState* PortRelay::findBackend(const std::string&) { return nullptr; }
+void PortRelay::proxyMonitorLoop() {}
+void PortRelay::socks5ListenLoop() {}
+void PortRelay::mixedListenLoop() {}
+void PortRelay::createThread(ThreadHandle& thread, void* (*func)(void*), void* arg) {
+    // Windows 占位实现：当前不创建后台线程，仅保留接口以通过编译。
+    (void)thread;
+    (void)func;
+    (void)arg;
+}
+void PortRelay::start() {}
+void PortRelay::stop() {
+    stop_.store(true);
+    listenFd_.store(-1);
+    backendPid_ = 0;
+}
+void PortRelay::gracefulStop() { backendPid_ = 0; }
+void PortRelay::setGroup(PortGroup* g) { group_ = g; }
+void PortRelay::forceReleasePort() {
+    groupReleased_.store(true);
+    listenFd_.store(-1);
+}
+void PortRelay::clearGroupLaunch() { groupReleased_.store(false); }
+
+#endif

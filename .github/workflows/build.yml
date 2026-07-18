@@ -156,7 +156,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, x86]
+        include:
+          - arch: x86_64
+            xmake_arch: x64
+          - arch: x86
+            xmake_arch: x86
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +171,7 @@ jobs:
 
       - name: Configure & Build (release)
         run: |
-          xmake f -p windows -a ${{ matrix.arch }} -m release -y
+          xmake f -p windows -a ${{ matrix.xmake_arch }} -m release -y
           xmake
         shell: bash
 
@@ -175,7 +179,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gatekeeper-windows-msvc-${{ matrix.arch }}
-          path: build/windows/${{ matrix.arch }}/*
+          path: build/windows/${{ matrix.xmake_arch }}/*
 
   # ═══════════════════════════════════════════════════════════════════
   # macOS (x86_64 + arm64) ── 原生构建
@@ -187,7 +191,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-latest    # Intel macOS (via Rosetta 2)
+            runner: macos-latest    # Apple Silicon runner builds x86_64 via Rosetta 2
           - arch: arm64
             runner: macos-latest    # Apple Silicon
     steps:

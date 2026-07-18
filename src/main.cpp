@@ -6,13 +6,16 @@
 
 #include <iostream>
 #include <memory>
-#include <netinet/tcp.h>
 #include <vector>
 #include <atomic>
 #include <thread>
-#include <signal.h>
-#include <unistd.h>
 #include <sstream>
+#include <csignal>
+#include <chrono>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 static std::vector<std::unique_ptr<PortGroup>> g_groups;
 
@@ -108,7 +111,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+#ifdef SIGPIPE
     signal(SIGPIPE, SIG_IGN);
+#endif
     signal(SIGINT,  handleSignal);
     signal(SIGTERM, handleSignal);
 
@@ -167,7 +172,13 @@ int main(int argc, char* argv[]) {
         std::cout << "systemd: READY=1" << std::endl;
     }
 
+#ifdef _WIN32
+    while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+#else
     pause();
+#endif
 
     std::cout << "门卫程序退出" << std::endl;
     // Stop all groups before exiting (groups stop their relays)
