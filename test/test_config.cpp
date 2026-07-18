@@ -217,7 +217,17 @@ TEST_CASE("parseConfig - proxy 模式: userpass 认证") {
                     "type": "userpass",
                     "username": "admin",
                     "password": "secret123"
+                }
+            }
+        ]
+    })");
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].mode == "proxy");
+    CHECK(cfgs[0].auth.type == "userpass");
+    CHECK(cfgs[0].auth.username == "admin");
+    CHECK(cfgs[0].auth.password == "secret123");
 }
+
 TEST_CASE("parseConfig - stop_command and idle_minutes present") {
     auto cfgs = parseConfig(R"({
         "ports": [
@@ -242,15 +252,6 @@ TEST_CASE("parseConfig - stop_command and idle_minutes defaults") {
     REQUIRE(cfgs.size() == 1);
     CHECK(cfgs[0].stopCommand.empty());
     CHECK(cfgs[0].idleMinutes == 20);
-}
-            }
-        ]
-    })");
-    REQUIRE(cfgs.size() == 1);
-    CHECK(cfgs[0].mode == "proxy");
-    CHECK(cfgs[0].auth.type == "userpass");
-    CHECK(cfgs[0].auth.username == "admin");
-    CHECK(cfgs[0].auth.password == "secret123");
 }
 
 TEST_CASE("parseConfig - group field present") {

@@ -106,6 +106,8 @@ class PortRelay {
     void proxyMonitorLoop();
 
 public:
+    // 检测端口是否被其他进程监听（不建立连接，不影响空闲超时）
+    static bool isPortBound(uint16_t port);
     PortRelay(const PortConfig& cfg);
     // Group coordination methods
     void setGroup(PortGroup* g);

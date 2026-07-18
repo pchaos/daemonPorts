@@ -163,5 +163,3 @@ TEST_CASE("gracefulStop - backendPid_ > 0 clears pid") {
     relay.gracefulStop();
     CHECK(relay.backendPid_ == 0);
 }
-
-}

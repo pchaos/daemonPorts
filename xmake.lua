@@ -122,7 +122,7 @@ target("gatekeeper-systemd")
 target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
-    add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp")
+    add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_retry.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp")
     add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp")
     add_includedirs("test", "src")
 
