@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GATEKEEPER="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/build/linux/x86_64/release/gatekeeper"
-CONFIG_TEMPLATE="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/gatekeeper-config.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}/.."
+GATEKEEPER="${PROJECT_ROOT}/build/linux/x86_64/release/gatekeeper"
+CONFIG_TEMPLATE="${PROJECT_ROOT}/gatekeeper-config.json"
 TMP_CONFIG="/tmp/gatekeeper_test_config.json"
-EVIDENCE="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/.omo/evidence/memory-leak-detection/task-3-simple-stress.txt"
+EVIDENCE="${PROJECT_ROOT}/.omo/evidence/memory-leak-detection/task-3-simple-stress.txt"
 ASAN_LOG="/tmp/asan_output.log"
 
 # Random ports
@@ -25,15 +27,15 @@ with socketserver.TCPServer(("127.0.0.1", $BACKEND_PORT), Handler) as httpd:
 PY
 BACKEND_PID=$!
 
-# Prepare config JSON: set listen port and dummy command
-jq '.ports[0].listen = ":'${GATEKEEPER_PORT}'" | .ports[0].command = "true"' "$CONFIG_TEMPLATE" > "$TMP_CONFIG"
+# Prepare config JSON
+jq ".listen_port = \"$GATEKEEPER_PORT\" | .backend = \"127.0.0.1:$BACKEND_PORT\"" "$CONFIG_TEMPLATE" > "$TMP_CONFIG"
 
 export LSAN_OPTIONS="exitcode=0:detect_leaks=1"
 
-# Run gatekeeper with timeout (30s) and capture stderr
+# Run gatekeeper with timeout (30 seconds) and capture stderr
 timeout 30s "$GATEKEEPER" -c "$TMP_CONFIG" 2> "$ASAN_LOG" &
 GK_PID=$!
-# Wait a moment for it to start
+# Give it time to start
 sleep 2
 
 # Record RSS before loop
@@ -41,7 +43,9 @@ RSS_BEFORE=$(ps -o rss= -p $GK_PID || echo 0)
 
 # Perform 1000 connection cycles (or until gatekeeper exits)
 for i in $(seq 1 1000); do
+    # If gatekeeper process died, break
     if ! kill -0 $GK_PID 2>/dev/null; then break; fi
+    # Connect via netcat, short timeout
     echo -n "" | nc -w 1 127.0.0.1 $GATEKEEPER_PORT || true
 done
 

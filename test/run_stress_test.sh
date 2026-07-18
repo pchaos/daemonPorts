@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GATEKEEPER="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/build/linux/x86_64/release/gatekeeper"
-CONFIG_TEMPLATE="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/gatekeeper-config.json"
+# Paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}/.."
+GATEKEEPER="${PROJECT_ROOT}/build/linux/x86_64/release/gatekeeper"
+CONFIG_TEMPLATE="${PROJECT_ROOT}/gatekeeper-config.json"
 TMP_CONFIG="/tmp/gatekeeper_test_config.json"
-EVIDENCE="/home/user/myDocs/YUNIO/tmp/gupiao/daemonPorts/.omo/evidence/memory-leak-detection/task-3-simple-stress.txt"
+EVIDENCE="${PROJECT_ROOT}/.omo/evidence/memory-leak-detection/task-3-simple-stress.txt"
 ASAN_LOG="/tmp/asan_output.log"
 
-# Random ports
+# Choose random backend port
 BACKEND_PORT=$(shuf -i 20000-30000 -n 1)
 GATEKEEPER_PORT=19999
 
-# Start simple backend (Python HTTP server) in background
+# Create simple backend (Python HTTP server) in background
 python3 - <<PY &
-import http.server, socketserver
+import http.server, socketserver, sys
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -25,36 +28,33 @@ with socketserver.TCPServer(("127.0.0.1", $BACKEND_PORT), Handler) as httpd:
 PY
 BACKEND_PID=$!
 
-# Prepare config JSON
+# Prepare config JSON (modify backend address and listen port)
 jq ".listen_port = \"$GATEKEEPER_PORT\" | .backend = \"127.0.0.1:$BACKEND_PORT\"" "$CONFIG_TEMPLATE" > "$TMP_CONFIG"
 
+# Start gatekeeper with ASan options, redirect stderr to log
 export LSAN_OPTIONS="exitcode=0:detect_leaks=1"
-
-# Run gatekeeper with timeout (30 seconds) and capture stderr
-timeout 30s "$GATEKEEPER" -c "$TMP_CONFIG" 2> "$ASAN_LOG" &
+"$GATEKEEPER" -c "$TMP_CONFIG" 2> "$ASAN_LOG" &
 GK_PID=$!
-# Give it time to start
+# Give it a moment to start
 sleep 2
 
-# Record RSS before loop
-RSS_BEFORE=$(ps -o rss= -p $GK_PID || echo 0)
+# Record RSS before
+RSS_BEFORE=$(ps -o rss= -p $GK_PID)
 
-# Perform 1000 connection cycles (or until gatekeeper exits)
+# Perform 1000 connection cycles
 for i in $(seq 1 1000); do
-    # If gatekeeper process died, break
-    if ! kill -0 $GK_PID 2>/dev/null; then break; fi
-    # Connect via netcat, short timeout
+    # Connect via netcat, send nothing, close
     echo -n "" | nc -w 1 127.0.0.1 $GATEKEEPER_PORT || true
 done
 
-# Record RSS after loop
-RSS_AFTER=$(ps -o rss= -p $GK_PID || echo 0)
+# Record RSS after
+RSS_AFTER=$(ps -o rss= -p $GK_PID)
 
-# Cleanup
-kill $GK_PID $BACKEND_PID 2>/dev/null || true
+# Kill processes
+kill $GK_PID $BACKEND_PID || true
 wait $GK_PID $BACKEND_PID 2>/dev/null || true
 
-# Count leak reports
+# Check for leak reports in ASAN log
 LEAK_COUNT=$(grep -c "LeakSanitizer" "$ASAN_LOG" || true)
 
 # Write evidence summary
@@ -70,4 +70,5 @@ LEAK_COUNT=$(grep -c "LeakSanitizer" "$ASAN_LOG" || true)
     head -n 20 "$ASAN_LOG"
 } > "$EVIDENCE"
 
+# Also output evidence to stdout for logging
 cat "$EVIDENCE"
