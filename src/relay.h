@@ -75,6 +75,8 @@ class PortRelay {
     // 活跃状态跟踪（由统一监控线程更新）
     time_t lastActiveTime_ = 0;
 
+    int lastNonListen_ = -1;
+
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
     void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
 

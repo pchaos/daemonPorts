@@ -63,6 +63,9 @@ static void monitorLoop() {
             bool active = nonListen > 0;
             r->updateActivity(active);
 
+            if (nonListen == r->lastNonListen_) continue;
+            r->lastNonListen_ = nonListen;
+
             std::cout << "  [" << r->name() << "] ACTIVE=" << (active ? "1" : "0")
                       << "  connections=" << cur.entries.size()
                       << "  non-listen=" << nonListen

@@ -15,6 +15,21 @@
 #include <ctime>
 #include <errno.h>
 
+// 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
+static bool isPortBound(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return true;
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sockaddr_in sa{};
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_port = htons(port);
+    int rc = bind(fd, (struct sockaddr*)&sa, sizeof(sa));
+    close(fd);
+    return (rc < 0 && errno == EADDRINUSE);
+}
+
 static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     auto c = addr.find(':');
     if (c == std::string::npos) return false;
@@ -139,10 +154,10 @@ void PortRelay::listenLoop() {
             if (!autoRestart_ || stop_.load()) break;
             std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
                       << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
-            while (!stop_.load()) {
+            int port = monitorPort();
+            if (port > 0 && isPortBound((uint16_t)port)) {
                 std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
             }
-            // 惩罚：当前重试间隔乘以 2，但不超过最大上限
             retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
             continue;
         }
