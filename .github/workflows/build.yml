@@ -125,7 +125,7 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "x86_64" ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq mingw-w64-x86_64-dev g++-mingw-w64-x86_64
+            sudo apt-get install -y -qq mingw-w64-x86-64-dev g++-mingw-w64-x86-64
           else
             sudo apt-get update -qq
             sudo apt-get install -y -qq mingw-w64-i686-dev g++-mingw-w64-i686
