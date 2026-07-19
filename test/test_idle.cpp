@@ -12,8 +12,8 @@ TEST_CASE("idle detection triggers gracefulStop") {
     PortRelay relay(cfg);
     // Simulate a running backend
     relay.backendPid_ = 12345;
-    // No recent activity (lastActiveTime_ defaults to 0)
-    CHECK(relay.hasRecentActivity(1) == false);
+    // lastActiveTime_ initialized to time(nullptr) → hasRecentActivity returns true immediately
+    CHECK(relay.hasRecentActivity(1) == true);
     // Invoke graceful stop as monitorLoop would do when idle
     relay.gracefulStop();
     // backendPid_ should be cleared

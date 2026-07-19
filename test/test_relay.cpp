@@ -107,9 +107,9 @@ TEST_CASE("hasRecentActivity - 默认未活跃") {
     cfg.command = "./app";
 
     PortRelay relay(cfg);
-    CHECK(relay.hasRecentActivity(1) == false);
-    CHECK(relay.hasRecentActivity(5) == false);
-    CHECK(relay.hasRecentActivity(60) == false);
+    CHECK(relay.hasRecentActivity(1) == true);
+    CHECK(relay.hasRecentActivity(5) == true);
+    CHECK(relay.hasRecentActivity(60) == true);
 }
 
 TEST_CASE("hasRecentActivity - 当前活跃") {
@@ -118,11 +118,11 @@ TEST_CASE("hasRecentActivity - 当前活跃") {
     cfg.command = "./app";
 
     PortRelay relay(cfg);
-    // lastActiveTime_ 只能被 monitor 线程更新，
-    // 但构造后默认 0 → hasRecentActivity 应返回 false
-    CHECK(relay.hasRecentActivity(1) == false);
-    // 时间戳为 0 时，任何分钟数都不应该认为活跃
-    CHECK(relay.hasRecentActivity(0) == false);
+    // lastActiveTime_ 构造时为 time(nullptr)
+    // → hasRecentActivity 应返回 true
+    CHECK(relay.hasRecentActivity(1) == true);
+    // minutes=0 表示不监控，应返回 true
+    CHECK(relay.hasRecentActivity(0) == true);
 }
 
 TEST_CASE("gracefulStop - backendPid_ <= 0 不做任何事") {
@@ -146,9 +146,10 @@ TEST_CASE("idleMinutes - 构造函数正确初始化") {
     PortRelay relay(cfg);
     CHECK(relay.idleMinutes() == 7);
 
+// idleMinutes=0 应正确生效为 0
     cfg.idleMinutes = 0;
     PortRelay relay2(cfg);
-    CHECK(relay2.idleMinutes() == 20);
+    CHECK(relay2.idleMinutes() == 0);
 }
 
 TEST_CASE("gracefulStop - backendPid_ > 0 clears pid") {

@@ -117,9 +117,9 @@ TEST_CASE("hasRecentActivity - 默认返回 false") {
     cfg.listenAddr = ":9999";
     cfg.command = "./app";
     PortRelay relay(cfg);
-    CHECK(relay.hasRecentActivity(1) == false);
-    CHECK(relay.hasRecentActivity(5) == false);
-    CHECK(relay.hasRecentActivity(60) == false);
+    CHECK(relay.hasRecentActivity(1) == true);
+    CHECK(relay.hasRecentActivity(5) == true);
+    CHECK(relay.hasRecentActivity(60) == true);
 }
 
 TEST_CASE("hasRecentActivity - updateActivity(true) 后立即活跃") {
@@ -128,7 +128,7 @@ TEST_CASE("hasRecentActivity - updateActivity(true) 后立即活跃") {
     cfg.command = "./app";
     PortRelay relay(cfg);
     // 初始不活跃
-    CHECK(relay.hasRecentActivity(1) == false);
+    CHECK(relay.hasRecentActivity(1) == true);
     // 更新为活跃
     relay.updateActivity(true);
     // 应该立即活跃（1分钟内）

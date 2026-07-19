@@ -64,7 +64,7 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0)
     , stopCommand_(cfg.stopCommand)
-    , idleMinutes_(cfg.idleMinutes > 0 ? cfg.idleMinutes : 20) {}
+    , idleMinutes_(cfg.idleMinutes >= 0 ? cfg.idleMinutes : 20) {}
 
 int PortRelay::createListener() {
     sockaddr_in sa;
@@ -222,7 +222,8 @@ void PortRelay::listenLoop() {
 }
 
 bool PortRelay::hasRecentActivity(int minutes) const {
-    if (lastActiveTime_ == 0) return false;
+    if (minutes == 0) return true;  // idle_minutes=0 → no idle detection
+
     time_t cutoff = time(nullptr) - minutes * 60;
     return lastActiveTime_ >= cutoff;
 }

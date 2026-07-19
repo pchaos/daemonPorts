@@ -73,7 +73,7 @@ class PortRelay {
     int tcpMonitorInterval_ = 0;
 
     // 活跃状态跟踪（由统一监控线程更新）
-    time_t lastActiveTime_ = 0;
+    time_t lastActiveTime_ = time(nullptr);
 
     int lastNonListen_ = -1;
 
