@@ -1,4 +1,6 @@
 set_xmakever("2.8.0")
+local GATEKEEPER_VERSION = "1.0.0"
+set_version(GATEKEEPER_VERSION)
 
 -- ============================================================
 -- xmake.lua - daemonPorts 多端口 TCP 接力门卫
@@ -18,6 +20,7 @@ target("gatekeeper")
     set_kind("binary")
     set_languages("c++11")
     add_files("src/*.cpp")
+    add_defines("GATEKEEPER_VERSION=\"" .. GATEKEEPER_VERSION .. "\"")
     add_includedirs("src")
 
     -- ── systemd 集成（需要 -DHAVE_SYSTEMD + -lsystemd）─────
@@ -72,6 +75,7 @@ target("gatekeeper-systemd")
     set_kind("binary")
     set_languages("c++11")
     add_files("src/*.cpp")
+    add_defines("GATEKEEPER_VERSION=\"" .. GATEKEEPER_VERSION .. "\"")
     add_includedirs("src")
 
     -- ── 始终启用 systemd ────────────────────────────────────

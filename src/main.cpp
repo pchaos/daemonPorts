@@ -108,9 +108,70 @@ static void monitorLoop() {
     }
 }
 
+static void printHelp() {
+    std::cout << "=== 用法 ===\n"
+              << "Usage: ./gatekeeper [options] <config.json>\n"
+              << "       ./gatekeeper -                        # 从 stdin 读取配置\n\n"
+              << "=== 选项 ===\n"
+              << "  -h, --help      显示此帮助信息\n"
+              << "  --version       显示版本号\n\n"
+              << "=== 工作模式 ===\n"
+              << "  simple  (默认)  引导后释放端口，后端直接接管。适合单端口单后端场景。\n"
+              << "  mixed           协议感知引导或常驻端口做协议路由。适合多协议聚合场景。\n"
+              << "  proxy           SOCKS5 代理服务器。适合将 gatekeeper 作为 SOCKS5 代理使用。\n\n"
+              << "=== 配置示例（simple 模式）===\n"
+              << R"({
+  "ports": [
+    {
+      "listen": ":3000",
+      "command": "./web-app --port 3000"
+    }
+  ]
+})" << "\n\n"
+              << "=== 配置示例（mixed 模式）===\n"
+              << R"({
+  "ports": [
+    {
+      "listen": ":3128",
+      "mode": "mixed",
+      "command": "./sing-box run",
+      "protocols": ["http", "socks5", "socks4"]
+    }
+  ]
+})" << "\n\n"
+              << "=== 配置示例（proxy 模式）===\n"
+              << R"({
+  "ports": [
+    {
+      "listen": ":1080",
+      "mode": "proxy",
+      "http_target": "127.0.0.1:8080"
+    }
+  ]
+})" << "\n\n"
+              << "=== 特殊用法 ===\n"
+              << "  ./gatekeeper -   从标准输入读取配置，适用于动态生成配置\n";
+}
+
+static void printVersion() {
+    std::cout << "gatekeeper v" << GATEKEEPER_VERSION << std::endl;
+}
+
 int main(int argc, char* argv[]) {
+    // 先处理 --help/-h/--version（不需要配置文件）
+    if (argc >= 2) {
+        if (strcmp(argv[1], "--version") == 0) {
+            printVersion();
+            return 0;
+        }
+        if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+            printHelp();
+            return 0;
+        }
+    }
+
     if (argc < 2) {
-        std::cerr << "用法: " << argv[0] << " config.json" << std::endl;
+        printHelp();
         return 1;
     }
 
