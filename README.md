@@ -259,6 +259,7 @@ gatekeeper 支持通过 NETLINK_INET_DIAG 实时采样端口的 TCP 连接状态
 |------|--------|------|
 | `monitor.enabled` | `false` | 是否启用 TCP 连接监控 |
 | `monitor.interval_seconds` | `60` | 采样间隔（秒） |
+| `monitor.log_dedup` | `"skip"` | 日志去重：`"skip"`（连接数不变不打印）、`"throttle"`（每5轮一次）、`"off"`（始终打印） |
 
 启用后，gatekeeper 会在一个统一监控线程中轮询所有启用了监控的端口，查询其 TCP 连接状态并更新活跃时间戳。日志示例：
 
