@@ -9,7 +9,8 @@
       "idle_minutes": 20,
       "monitor": {
         "enabled": true,
-        "interval_seconds": 60
+        "interval_seconds": 60,
+        "log_dedup": "off"
       },
       "delay": 30000,
       "refresh_seconds": 15,

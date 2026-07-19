@@ -24,6 +24,7 @@ struct ProtocolConfig {
 struct MonitorConfig {
     bool        enabled = false;     // 是否启用端口连接监控
     int         intervalSec = 60;    // 采样间隔（秒）
+    std::string logDedup = "skip";   // 日志去重: "skip"(不变跳过) | "throttle"(降频) | "off"(始终打印)
 };
 
 struct PortConfig {

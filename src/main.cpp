@@ -63,7 +63,24 @@ static void monitorLoop() {
             bool active = nonListen > 0;
             r->updateActivity(active);
 
-            if (nonListen == r->lastNonListen_) continue;
+            // 日志去重控制
+            bool shouldPrint = true;
+            const std::string& dedup = r->logDedupMode();
+            if (dedup == "off") {
+                // 始终打印
+            } else if (dedup == "throttle") {
+                // 降频：值不变时每 5 轮打印一次
+                if (nonListen == r->lastNonListen_) {
+                    if (++r->logDedupCounter() < 5) shouldPrint = false;
+                    else r->logDedupCounter() = 0;
+                } else {
+                    r->logDedupCounter() = 0;
+                }
+            } else {
+                // "skip"（默认）：值不变时跳过
+                if (nonListen == r->lastNonListen_) shouldPrint = false;
+            }
+            if (!shouldPrint) continue;
             r->lastNonListen_ = nonListen;
 
             std::cout << "  [" << r->name() << "] ACTIVE=" << (active ? "1" : "0")

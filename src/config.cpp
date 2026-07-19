@@ -70,6 +70,7 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
             if (mon->is_obj()) {
                 if (auto* e = mon->get("enabled")) cfg.monitor.enabled = e->as_bool();
                 if (auto* iv = mon->get("interval_seconds")) cfg.monitor.intervalSec = (int)iv->as_num();
+                if (auto* ld = mon->get("log_dedup")) cfg.monitor.logDedup = ld->as_str();
             }
         }
 

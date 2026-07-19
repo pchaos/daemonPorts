@@ -61,10 +61,11 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , protocols_(cfg.protocols)
     , auth_(cfg.auth)
     , httpTarget_(cfg.httpTarget)
+    , stopCommand_(cfg.stopCommand)
+    , idleMinutes_(cfg.idleMinutes >= 0 ? cfg.idleMinutes : 20)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0)
-    , stopCommand_(cfg.stopCommand)
-    , idleMinutes_(cfg.idleMinutes >= 0 ? cfg.idleMinutes : 20) {}
+    , logDedupMode_(cfg.monitor.logDedup) {}
 
 int PortRelay::createListener() {
     sockaddr_in sa;

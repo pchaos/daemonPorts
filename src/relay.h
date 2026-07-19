@@ -72,6 +72,10 @@ class PortRelay {
     // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
     int tcpMonitorInterval_ = 0;
 
+    // 日志去重模式: "skip" | "throttle" | "off"
+    std::string logDedupMode_ = "skip";
+    int logDedupCounter_ = 0;  // throttle 模式计数器
+
     // 活跃状态跟踪（由统一监控线程更新）
     time_t lastActiveTime_ = time(nullptr);
 
@@ -133,6 +137,8 @@ public:
     bool monitorEnabled() const { return tcpMonitorInterval_ > 0; }
     int  monitorIntervalSec() const { return tcpMonitorInterval_; }
     int  monitorPort() const;
+    const std::string& logDedupMode() const { return logDedupMode_; }
+    int& logDedupCounter() { return logDedupCounter_; }
     void updateActivity(bool active);
 };
 
