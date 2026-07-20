@@ -213,10 +213,24 @@ void PortRelay::listenLoop() {
 
         if (!autoRestart_ || stop_.load()) break;
 
-        while (!stop_.load() && backendPid_ != 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // After backend exits, wait delayMs then check if port is still in use
+        // by a daemonized child process (e.g., 9router's next-server)
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+
+        {
+            int port = monitorPort();
+            if (port > 0 && isPortBound((uint16_t)port)) {
+                std::cout << "  [" << name_ << "] port still in use (child alive), waiting for release" << std::endl;
+                while (!stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    if (!isPortBound((uint16_t)port)) {
+                        std::cout << "  [" << name_ << "] port released" << std::endl;
+                        break;
+                    }
+                }
+                if (stop_.load()) break;
+            }
         }
-        if (stop_.load()) break;
 
         std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
@@ -648,10 +662,28 @@ void PortRelay::socks5ListenLoop() {
             listenFd_ = -1;
         }
         if (!autoRestart_ || stop_.load()) break;
-        while (!stop_.load() && backendPid_ != 0) {
+while (!stop_.load() && backendPid_ != 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         if (stop_.load()) break;
+
+        // After backend exits, wait delayMs then check if port is still in use
+        // by a daemonized child process (e.g., 9router's next-server)
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+
+        int port = monitorPort();
+        if (port > 0 && isPortBound((uint16_t)port)) {
+            std::cout << "  [" << name_ << "] port still in use (child alive), waiting for release" << std::endl;
+            while (!stop_.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (!isPortBound((uint16_t)port)) {
+                    std::cout << "  [" << name_ << "] port released" << std::endl;
+                    break;
+                }
+            }
+            if (stop_.load()) break;
+        }
+
         std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
 }
@@ -784,10 +816,24 @@ void PortRelay::mixedListenLoop() {
 
         if (!autoRestart_ || stop_.load()) break;
 
-        while (!stop_.load() && backendPid_ != 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // After backend exits, wait delayMs then check if port is still in use
+        // by a daemonized child process (e.g., 9router's next-server)
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+
+        {
+            int port = monitorPort();
+            if (port > 0 && isPortBound((uint16_t)port)) {
+                std::cout << "  [" << name_ << "] port still in use (child alive), waiting for release" << std::endl;
+                while (!stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    if (!isPortBound((uint16_t)port)) {
+                        std::cout << "  [" << name_ << "] port released" << std::endl;
+                        break;
+                    }
+                }
+                if (stop_.load()) break;
+            }
         }
-        if (stop_.load()) break;
 
         std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
