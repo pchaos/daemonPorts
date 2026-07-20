@@ -1047,6 +1047,14 @@ void PortRelay::stop() {
     if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
 }
 
+void PortRelay::signalStop() {
+    stop_.store(true);
+    if (listenFd_.load() >= 0) {
+        ::close(listenFd_.load());
+        listenFd_.store(-1);
+    }
+}
+
 // Graceful stop implementation
 void PortRelay::gracefulStop() {
     if (backendPid_ <= 0) return;

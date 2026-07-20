@@ -43,17 +43,27 @@ void PortGroup::onConnection(PortRelay * /*source*/) {
 
 void PortGroup::stop() {
   if (stop_.exchange(true))
-    return; // already stopping
+    return;
   std::lock_guard<std::mutex> lock(mtx_);
   for (PortRelay *r : relays_) {
     r->stop();
   }
   launched_ = false;
-    running_ = false;
+  running_ = false;
+}
+
+void PortGroup::signalStop() {
+  if (stop_.exchange(true))
+    return;
+  std::lock_guard<std::mutex> lock(mtx_);
+  for (PortRelay *r : relays_) {
+    r->signalStop();
+  }
+
 }
 
 void PortGroup::resetLaunch() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    launched_ = false;
-    running_ = false;
+  std::lock_guard<std::mutex> lock(mtx_);
+  launched_ = false;
+  running_ = false;
 }

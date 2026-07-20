@@ -29,12 +29,12 @@ static std::atomic<bool> g_stop{false};
 
 static void handleSignal(int) {
     g_stop.store(true);
-    // Stop all groups first
-    for (auto& g : g_groups) {
-        if (g) g->stop();
+	// Stop all groups first
+	for (auto& g : g_groups) {
+		if (g) g->signalStop();
     }
-    // Then stop any remaining relays (non‑grouped or already stopped)
-    for (auto& r : g_relays) r->stop();
+	// Then stop any remaining relays (non‑grouped or already stopped)
+	for (auto& r : g_relays) r->signalStop();
 }
 
 // 统一 TCP 连接监控线程：轮询所有端口的连接状态并更新活跃时间戳

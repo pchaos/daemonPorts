@@ -126,6 +126,7 @@ public:
     std::string buildStartupResponse() const;
 
     void start();
+    void signalStop();
     void stop();
 
     void gracefulStop();

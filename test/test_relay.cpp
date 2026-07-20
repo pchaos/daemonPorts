@@ -164,3 +164,19 @@ TEST_CASE("gracefulStop - backendPid_ > 0 clears pid") {
     relay.gracefulStop();
     CHECK(relay.backendPid_ == 0);
 }
+
+TEST_CASE("signalStop - idempotent and non-blocking") {
+    PortConfig cfg;
+    cfg.listenAddr = ":0"; // dummy address, no actual backend
+    cfg.command = ""; // no command to launch
+    PortRelay relay(cfg);
+    // First call should set stop flag
+    relay.signalStop();
+    CHECK(relay.stop_.load() == true);
+    // Second call should be safe and not change state
+    relay.signalStop();
+    CHECK(relay.stop_.load() == true);
+    // Calling stop() after signalStop should be a no-op
+    relay.stop();
+    CHECK(relay.stop_.load() == true);
+}
