@@ -11,6 +11,7 @@
 #include <chrono>
 #include <ctime>
 #include <pthread.h>
+#include <mutex>
 
 class PortGroup; // forward declaration for grouping
 
@@ -75,6 +76,9 @@ class PortRelay {
     // 日志去重模式: "skip" | "throttle" | "off"
     std::string logDedupMode_ = "skip";
     int logDedupCounter_ = 0;  // throttle 模式计数器
+    int consecutiveBindFailures_ = 0; // consecutive bind failures counter
+    static const int LOG_SILENCE_THRESHOLD = 10;
+    void logBindFailed();
 
     // 活跃状态跟踪（由统一监控线程更新）
     time_t lastActiveTime_ = time(nullptr);

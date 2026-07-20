@@ -14,8 +14,104 @@
 #include <netdb.h>
 #include <ctime>
 #include <errno.h>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <dirent.h>
+#include <algorithm>
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
+static std::string findProcessUsingPort(uint16_t port) {
+    // 方案1: ss -tlnp（能看到同用户进程的进程名）
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "ss -tlnp 2>/dev/null | grep ':%u '", port);
+    FILE* p = popen(cmd, "r");
+    if (p) {
+        char buf[512];
+        if (fgets(buf, sizeof(buf), p)) {
+            pclose(p);
+            std::string result(buf);
+            if (!result.empty() && result.back() == '\n') result.pop_back();
+            return result.substr(0, 80);
+        }
+        pclose(p);
+    }
+
+    // 方案2: 读取 /proc/net/tcp 查找 inode，再扫描 /proc/*/fd 匹配进程名
+    // 这对所有进程可见（包括 root 进程）
+    char hexPort[16];
+    snprintf(hexPort, sizeof(hexPort), "%04X", port);
+    std::ifstream proc("/proc/net/tcp");
+    std::string line;
+    while (std::getline(proc, line)) {
+        // 格式: sl  local_address  rem_address  st  ...  inode
+        // local_address: 00000000:4EA0
+        std::istringstream iss(line);
+        std::string sl, localAddr;
+        if (!(iss >> sl >> localAddr)) continue;
+        if (localAddr.size() < 5) continue;
+        std::string addrPort = localAddr.substr(localAddr.find(':') + 1);
+        if (addrPort != hexPort) continue;
+
+        // 找到 inode（第9列，1-indexed，跳过 sl,local,rem,st,tx,rx,tr,tm）
+        // 格式: 0: 00000000:4EA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 123456
+        std::string token;
+        for (int i = 0; i < 2; i++) iss >> token; // skip rem_address, st
+        // st is 0A for LISTEN
+        // skip tx_queue/rx_queue, tr, tm->when, retrnsmt, uid, timeout
+        for (int i = 0; i < 6; i++) iss >> token;
+        std::string inodeStr = token; // inode is the 9th column (0-indexed from rem_address)
+
+        // 扫描 /proc/*/fd/ 查找 inode
+        DIR* procDir = opendir("/proc");
+        if (!procDir) return "";
+        struct dirent* entry;
+        while ((entry = readdir(procDir)) != nullptr) {
+            if (entry->d_type != DT_DIR) continue;
+            char* end;
+            long pid = strtol(entry->d_name, &end, 10);
+            if (*end != '\0') continue;
+
+            char fdPath[256];
+            snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
+            DIR* fdDir = opendir(fdPath);
+            if (!fdDir) continue;
+            struct dirent* fdEntry;
+            while ((fdEntry = readdir(fdDir)) != nullptr) {
+                char linkPath[256];
+                snprintf(linkPath, sizeof(linkPath), "/proc/%ld/fd/%s", pid, fdEntry->d_name);
+                char linkTarget[256];
+                ssize_t len = readlink(linkPath, linkTarget, sizeof(linkTarget) - 1);
+                if (len > 0) {
+                    linkTarget[len] = '\0';
+                    // socket inode 格式: socket:[123456]
+                    if (strncmp(linkTarget, "socket:[", 8) == 0) {
+                        char* end2;
+                        long inode = strtol(linkTarget + 8, &end2, 10);
+                        if (*end2 == ']' && inode == strtol(inodeStr.c_str(), nullptr, 10)) {
+                            closedir(fdDir);
+                            closedir(procDir);
+                            char cmdlinePath[256];
+                            snprintf(cmdlinePath, sizeof(cmdlinePath), "/proc/%ld/comm", pid);
+                            std::ifstream comm(cmdlinePath);
+                            std::string commName;
+                            std::getline(comm, commName);
+                            if (!commName.empty()) {
+                                return commName + " (PID=" + std::to_string(pid) + ")";
+                            }
+                            return "PID=" + std::to_string(pid);
+                        }
+                    }
+                }
+            }
+            closedir(fdDir);
+        }
+        closedir(procDir);
+        break;
+    }
+    return "";
+}
+
 bool PortRelay::isPortBound(uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return true;
@@ -28,6 +124,27 @@ bool PortRelay::isPortBound(uint16_t port) {
     int rc = bind(fd, (struct sockaddr*)&sa, sizeof(sa));
     close(fd);
     return (rc < 0 && errno == EADDRINUSE);
+}
+
+void PortRelay::logBindFailed() {
+    std::string msg = "  [" + name_ + "] 绑定 " + listenAddr_ + " 失败（";
+    if (errno == EACCES) {
+        msg += "权限不足，需要 CAP_NET_BIND_SERVICE";
+    } else if (errno == EADDRINUSE) {
+        msg += "端口被占用";
+        int port = monitorPort();
+        if (port > 0) {
+            std::string occupant = findProcessUsingPort(static_cast<uint16_t>(port));
+            if (!occupant.empty()) {
+                msg += " by " + occupant;
+            }
+        }
+    } else {
+        msg += strerror(errno);
+    }
+    msg += "），" + std::to_string(retrySeconds_) + " 秒后重试（最大 "
+           + std::to_string(retrySecondsMax_) + " 秒）";
+    std::cerr << msg << std::endl;
 }
 
 static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
@@ -77,9 +194,9 @@ int PortRelay::createListener() {
     if (fd < 0) { perror("socket"); return -1; }
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-        perror("bind"); close(fd); return -1;
-    }
+        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            close(fd); return -1;
+        }
     if (listen(fd, 128) < 0) { perror("listen"); close(fd); return -1; }
     return fd;
 }
@@ -151,20 +268,28 @@ void PortRelay::listenLoop() {
             break;
         }
         listenFd_.store(createListener());
-        if (listenFd_.load() < 0) {
-            if (!autoRestart_ || stop_.load()) break;
-            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
-                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
-            int port = monitorPort();
-            if (port > 0 && isPortBound((uint16_t)port)) {
-                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            if (listenFd_.load() < 0) {
+                if (stop_.load()) break;
+                consecutiveBindFailures_++;
+                if (consecutiveBindFailures_ == 1) {
+                    logBindFailed();
+                } else if (consecutiveBindFailures_ == LOG_SILENCE_THRESHOLD) {
+                    std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
+                              << " 次绑定失败，后续日志已静默" << std::endl;
+                }
+
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
+                while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                if (stop_.load()) break;
+                retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+                continue;
             }
-            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
-            continue;
-        }
 
         // 绑定成功，重置为初始间隔
         retrySeconds_ = retrySecondsBase_;
+        consecutiveBindFailures_ = 0;
 
         std::cout << "  [" << name_ << "] 监听 " << listenAddr_ << std::endl;
 
@@ -477,17 +602,23 @@ static int recv_exact(int fd, unsigned char* buf, int n) {
 void PortRelay::socks5ListenLoop() {
     while (!stop_.load()) {
         listenFd_ = createListener();
-        if (listenFd_ < 0) {
-            if (!autoRestart_ || stop_.load()) break;
-            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
-                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
-            int port = monitorPort();
-            if (port > 0 && isPortBound((uint16_t)port)) {
-                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            if (listenFd_ < 0) {
+                if (stop_.load()) break;
+                consecutiveBindFailures_++;
+                if (consecutiveBindFailures_ == 1) {
+                    logBindFailed();
+                } else if (consecutiveBindFailures_ == LOG_SILENCE_THRESHOLD) {
+                    std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
+                              << " 次绑定失败，后续日志已静默" << std::endl;
+                }
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
+                while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                if (stop_.load()) break;
+                retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+                continue;
             }
-            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
-            continue;
-        }
         retrySeconds_ = retrySecondsBase_;
 
         std::cout << "  [" << name_ << "] SOCKS5 代理监听 " << listenAddr_
@@ -718,18 +849,23 @@ void PortRelay::mixedListenLoop() {
     // 主循环（hold_port=true 和 hold_port=false 共用）
     while (!stop_.load()) {
         listenFd_.store(createListener());
-        if (listenFd_.load() < 0) {
-            if (!autoRestart_ || stop_.load()) break;
-            std::cerr << "  [" << name_ << "] 绑定失败，" << retrySeconds_
-                      << " 秒后重试（最大 " << retrySecondsMax_ << " 秒）" << std::endl;
-            int port = monitorPort();
-            if (port > 0 && isPortBound((uint16_t)port)) {
-                std::this_thread::sleep_for(std::chrono::seconds(retrySeconds_));
+            if (listenFd_.load() < 0) {
+                if (stop_.load()) break;
+                consecutiveBindFailures_++;
+                if (consecutiveBindFailures_ == 1) {
+                    logBindFailed();
+                } else if (consecutiveBindFailures_ == LOG_SILENCE_THRESHOLD) {
+                    std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
+                              << " 次绑定失败，后续日志已静默" << std::endl;
+                }
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
+                while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                if (stop_.load()) break;
+                retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
+                continue;
             }
-            // 惩罚：当前重试间隔乘以 2，但不超过最大上限
-            retrySeconds_ = std::min(retrySeconds_ * 2, retrySecondsMax_);
-            continue;
-        }
 
         // 绑定成功，重置为初始间隔
         retrySeconds_ = retrySecondsBase_;
