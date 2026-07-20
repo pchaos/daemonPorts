@@ -84,6 +84,7 @@ class PortRelay {
     time_t lastActiveTime_ = time(nullptr);
 
     int lastNonListen_ = -1;
+    time_t lastSampleTime_ = 0;  // 上次采样时间（按各自 interval 控制频率）
 
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
     void createThread(pthread_t& thread, void* (*func)(void*), void* arg);

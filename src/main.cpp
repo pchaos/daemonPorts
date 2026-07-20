@@ -38,20 +38,34 @@ static void handleSignal(int) {
 }
 
 // 统一 TCP 连接监控线程：轮询所有端口的连接状态并更新活跃时间戳
+static int gcd(int a, int b) {
+    while (b) { int t = b; b = a % b; a = t; }
+    return a;
+}
 static void monitorLoop() {
-    // 找出最小的轮询间隔（秒）
-    int interval = 60;
+    // 计算所有端口间隔的最大公约数作为睡眠间隔
+    int interval = 0;
     for (auto& r : g_relays) {
         if (r->monitorEnabled()) {
-            interval = std::min(interval, r->monitorIntervalSec());
+            interval = (interval == 0) ? r->monitorIntervalSec() : gcd(interval, r->monitorIntervalSec());
         }
     }
 
-    std::cout << "TCP 连接监控已启动，轮询间隔 " << interval << " 秒" << std::endl;
+    std::cout << "TCP 连接监控已启动，各端口独立轮询间隔：" << std::endl;
+    for (auto& r : g_relays) {
+        if (r->monitorEnabled()) {
+            std::cout << "  [" << r->name() << "] " << r->monitorIntervalSec() << " 秒" << " (tick=" << interval << "s)" << std::endl;
+        }
+    }
 
     while (!g_stop.load()) {
+    time_t now = time(nullptr);
         for (auto& r : g_relays) {
             if (!r->monitorEnabled()) continue;
+                        // 按端口各自间隔控制采样频率
+            time_t elapsed = now - r->lastSampleTime_;
+            if (elapsed < r->monitorIntervalSec()) continue;
+            r->lastSampleTime_ = now;
             int port = r->monitorPort();
             if (port <= 0) continue;
 
@@ -105,8 +119,9 @@ static void monitorLoop() {
         for (int i = 0; i < interval && !g_stop.load(); i++) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
+        }
     }
-}
+
 
 static void printHelp() {
     std::cout << "=== 用法 ===\n"
