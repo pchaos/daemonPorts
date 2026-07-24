@@ -46,8 +46,8 @@ if [ "$SKIP_BUILD" != "--skip-build" ]; then
   info "  xmake 版本: $(xmake --version 2>&1 | head -1)"
 
   # 1b. 清理旧缓存，配置编译选项
-  info "  配置 xmake（$MODE 模式，HAVE_SYSTEMD=y）..."
-  xmake f -c -m "$MODE" --HAVE_SYSTEMD=y 2>&1 | sed 's/^/    /'
+  info "  配置 xmake（$MODE 模式）..."
+  xmake f -c -m "$MODE" 2>&1 | sed 's/^/    /'
   if [ $? -ne 0 ]; then
     error "xmake 配置失败"
     exit 1
