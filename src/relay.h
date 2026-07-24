@@ -43,7 +43,7 @@ class PortRelay {
     PortGroup* group_{nullptr};
     std::atomic<bool> groupReleased_{false};
     public:
-    pid_t backendPid_ = 0;
+    std::atomic<pid_t> backendPid_{0};
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
     pthread_t listenThread_ = 0;
@@ -81,7 +81,7 @@ class PortRelay {
     void logBindFailed();
 
     // 活跃状态跟踪（由统一监控线程更新）
-    time_t lastActiveTime_ = time(nullptr);
+    std::atomic<time_t> lastActiveTime_{time(nullptr)};
 
     int lastNonListen_ = -1;
     time_t lastSampleTime_ = 0;  // 上次采样时间（按各自 interval 控制频率）
@@ -130,7 +130,7 @@ public:
     void stop();
 
     void gracefulStop();
-    bool isBackendRunning() const { return backendPid_ > 0; }
+    bool isBackendRunning() const { return backendPid_.load() > 0; }
     PortGroup* group() const { return group_; }
     int idleMinutes() const { return idleMinutes_; }
 

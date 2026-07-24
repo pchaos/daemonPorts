@@ -37,7 +37,7 @@ sleep 1
 info "安装二进制..."
 sudo cp -f "$BINARY_SRC" /usr/local/bin/gatekeeper
 sudo chmod 755 /usr/local/bin/gatekeeper
-info "  版本: $(/usr/local/bin/gatekeeper --version 2>/dev/null || echo "v1.0.3")"
+info "  版本: $(/usr/local/bin/gatekeeper --version 2>/dev/null || echo "v1.0.4")"
 
 if [ ! -f /usr/local/etc/gatekeeper/config.json ]; then
   info "安装配置文件..."

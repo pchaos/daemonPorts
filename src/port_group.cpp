@@ -34,9 +34,9 @@ void PortGroup::onConnection(PortRelay * /*source*/) {
       }
     }
     // Close listening socket so that the port is released to the backend
-    if (r->listenFd_.load() >= 0) {
-      close(r->listenFd_);
-      r->listenFd_.store(-1);
+    int fd = r->listenFd_.exchange(-1);
+    if (fd >= 0) {
+      close(fd);
     }
   }
 }

@@ -402,8 +402,8 @@ void PortRelay::listenLoop() {
                 backendPid_ = pid;
                 std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
 
-                ::close(listenFd_.load());
-                listenFd_.store(-1);
+                int lfd = listenFd_.exchange(-1);
+                if (lfd >= 0) ::close(lfd);
                 std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                 if (!waitForBackend(delayMs_))
@@ -415,9 +415,9 @@ void PortRelay::listenLoop() {
             }
         }
 
-        if (listenFd_.load() >= 0) {
-            ::close(listenFd_.load());
-            listenFd_.store(-1);
+        int fd = listenFd_.exchange(-1);
+        if (fd >= 0) {
+            ::close(fd);
         }
 
         if (!autoRestart_ || stop_.load()) break;
@@ -1084,8 +1084,8 @@ void PortRelay::mixedListenLoop() {
                     std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")"
                               << std::endl;
 
-                    ::close(listenFd_.load());
-                    listenFd_.store(-1);
+                    int lfd = listenFd_.exchange(-1);
+                    if (lfd >= 0) ::close(lfd);
                     std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                     if (!waitForBackend(delayMs_))
@@ -1185,14 +1185,11 @@ void PortRelay::start() {
 
 void PortRelay::stop() {
     // Idempotent stop: if already stopping, do nothing
-    if (stop_.load()) {
-        return;
-    }
-    stop_.store(true);
+    if (stop_.exchange(true)) return;
     // Close listening socket if open
-    if (listenFd_.load() >= 0) {
-        ::close(listenFd_.load());
-        listenFd_.store(-1);
+    int fd = listenFd_.exchange(-1);
+    if (fd >= 0) {
+        ::close(fd);
     }
     // Clean up simple / mixed+hold_port=false backend
     if (backendPid_ > 0) {
@@ -1216,9 +1213,9 @@ void PortRelay::stop() {
 
 void PortRelay::signalStop() {
     stop_.store(true);
-    if (listenFd_.load() >= 0) {
-        ::close(listenFd_.load());
-        listenFd_.store(-1);
+    int fd = listenFd_.exchange(-1);
+    if (fd >= 0) {
+        ::close(fd);
     }
 }
 
@@ -1255,9 +1252,9 @@ void PortRelay::setGroup(PortGroup* g) {
 
 void PortRelay::forceReleasePort() {
     groupReleased_.store(true);
-    if (listenFd_.load() >= 0) {
-        ::close(listenFd_.load());
-        listenFd_.store(-1);
+    int fd = listenFd_.exchange(-1);
+    if (fd >= 0) {
+        ::close(fd);
     }
 }
 
