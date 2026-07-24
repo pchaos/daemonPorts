@@ -1,5 +1,5 @@
 set_xmakever("2.8.0")
-local GATEKEEPER_VERSION = "1.0.2"
+local GATEKEEPER_VERSION = "1.0.3"
 set_version(GATEKEEPER_VERSION)
 
 -- ============================================================

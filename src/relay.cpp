@@ -21,6 +21,85 @@
 #include <algorithm>
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
+// 检测端口是否被占用，返回占用进程的 PID（找不到返回 0）
+static pid_t findPidUsingPort(uint16_t port) {
+    // 方案1: ss -tlnp 解析 pid= 字段
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "ss -tlnp 2>/dev/null | grep ':%u '", port);
+    FILE* p = popen(cmd, "r");
+    if (p) {
+        char buf[512];
+        if (fgets(buf, sizeof(buf), p)) {
+            pclose(p);
+            char* pidStr = strstr(buf, "pid=");
+            if (pidStr) {
+                pid_t pid = (pid_t)strtol(pidStr + 4, nullptr, 10);
+                if (pid > 0) return pid;
+            }
+        } else {
+            pclose(p);
+        }
+    }
+
+    // 方案2: /proc/net/tcp + /proc/*/fd/
+    char hexPort[16];
+    snprintf(hexPort, sizeof(hexPort), "%04X", port);
+    std::ifstream proc("/proc/net/tcp");
+    std::string line;
+    while (std::getline(proc, line)) {
+        std::istringstream iss(line);
+        std::string sl, localAddr;
+        if (!(iss >> sl >> localAddr)) continue;
+        if (localAddr.size() < 5) continue;
+        std::string addrPort = localAddr.substr(localAddr.find(':') + 1);
+        if (addrPort != hexPort) continue;
+
+        // 跳过不需要的字段，找到 inode（第9列）
+        std::string token;
+        for (int i = 0; i < 2; i++) iss >> token; // skip rem_address, st
+        for (int i = 0; i < 6; i++) iss >> token;
+        std::string inodeStr = token;
+
+        DIR* procDir = opendir("/proc");
+        if (!procDir) return 0;
+        struct dirent* entry;
+        while ((entry = readdir(procDir)) != nullptr) {
+            if (entry->d_type != DT_DIR) continue;
+            char* end;
+            long pid = strtol(entry->d_name, &end, 10);
+            if (*end != '\0') continue;
+
+            char fdPath[256];
+            snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
+            DIR* fdDir = opendir(fdPath);
+            if (!fdDir) continue;
+            struct dirent* fdEntry;
+            while ((fdEntry = readdir(fdDir)) != nullptr) {
+                char linkPath[256];
+                snprintf(linkPath, sizeof(linkPath), "/proc/%ld/fd/%s", pid, fdEntry->d_name);
+                char linkTarget[256];
+                ssize_t len = readlink(linkPath, linkTarget, sizeof(linkTarget) - 1);
+                if (len > 0) {
+                    linkTarget[len] = '\0';
+                    if (strncmp(linkTarget, "socket:[", 8) == 0) {
+                        char* end2;
+                        long inode = strtol(linkTarget + 8, &end2, 10);
+                        if (*end2 == ']' && inode == strtol(inodeStr.c_str(), nullptr, 10)) {
+                            closedir(fdDir);
+                            closedir(procDir);
+                            return (pid_t)pid;
+                        }
+                    }
+                }
+            }
+            closedir(fdDir);
+        }
+        closedir(procDir);
+        break;
+    }
+    return 0;
+}
+
 static std::string findProcessUsingPort(uint16_t port) {
     // 方案1: ss -tlnp（能看到同用户进程的进程名）
     char cmd[256];
@@ -267,6 +346,11 @@ void PortRelay::listenLoop() {
         if (groupReleased_.load()) {
             break;
         }
+        // If daemon is alive and tracked by monitorBackend, skip bind
+        if (backendPid_ > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+        }
         listenFd_.store(createListener());
             if (listenFd_.load() < 0) {
                 if (stop_.load()) break;
@@ -347,6 +431,11 @@ void PortRelay::listenLoop() {
             if (port > 0 && isPortBound((uint16_t)port)) {
                 std::cout << "  [" << name_ << "] port still in use (child alive), waiting for release" << std::endl;
                 while (!stop_.load()) {
+                    // If monitorBackend found the daemon process, stop waiting
+                    if (backendPid_ > 0) {
+                        std::cout << "  [" << name_ << "] daemon process tracked (PID=" << backendPid_ << "), stopping wait" << std::endl;
+                        break;
+                    }
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                     if (!isPortBound((uint16_t)port)) {
                         std::cout << "  [" << name_ << "] port released" << std::endl;
@@ -357,7 +446,14 @@ void PortRelay::listenLoop() {
             }
         }
 
-        std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
+        // If monitorBackend is tracking a live daemon, skip re-listen.
+// Wait for idle timeout -> gracefulStop -> daemon exit -> backendPid_ = 0.
+if (backendPid_ > 0) {
+    std::cout << "  [" << name_ << "] daemon alive (PID=" << backendPid_ << "), skipping re-listen, waiting for idle timeout" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    continue;
+}
+std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
 }
 
@@ -384,7 +480,48 @@ void PortRelay::monitorBackend() {
     while (!stop_.load()) {
         if (backendPid_ > 0) {
             int status;
-            waitpid(backendPid_, &status, 0);
+            pid_t ret = waitpid(backendPid_, &status, 0);
+            if (ret < 0 && errno == ECHILD) {
+                // 非子进程（daemon 化进程），轮询端口状态
+                int port = monitorPort();
+                if (port > 0) {
+                    std::cout << "  [" << name_ << "] 监控 daemon 进程 (PID=" << backendPid_
+                              << ")，轮询端口 " << port << std::endl;
+                    while (!stop_.load()) {
+                        std::this_thread::sleep_for(std::chrono::seconds(5));
+                        if (!isPortBound((uint16_t)port)) {
+                            std::cout << "  [" << name_ << "] daemon 进程已退出，端口已释放" << std::endl;
+                            break;
+                        }
+                    }
+                    if (stop_.load()) break;
+                }
+                backendPid_ = 0;
+                if (!autoRestart_ || stop_.load()) break;
+                std::cout << "  [" << name_ << "] 将在下次连接时重启" << std::endl;
+                continue;
+            }
+            // 直接子进程（cli.js 等）已退出，检查端口是否被 daemon 化进程持有
+            int port = monitorPort();
+            pid_t realPid = 0;
+            if (port > 0) {
+                {
+                    // 总等待时间 = 1.5 倍 delayMs_，每 2 秒检测一次
+                    int maxRetries = (int)((delayMs_ * 1.5) / 2000);
+                    if (maxRetries < 1) maxRetries = 1;
+                    for (int retry = 0; retry < maxRetries; retry++) {
+                        realPid = findPidUsingPort((uint16_t)port);
+                        if (realPid > 0 && realPid != backendPid_) break;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                    }
+                }
+                if (realPid > 0 && realPid != backendPid_) {
+                    std::cout << "  [" << name_ << "] 检测到 daemon 进程 (PID=" << realPid
+                              << ")，更新后端 PID" << std::endl;
+                    backendPid_ = realPid;
+                    continue;  // 继续监控新 PID
+                }
+            }
             std::cout << "  [" << name_ << "] 后端已退出" << std::endl;
             backendPid_ = 0;
 
@@ -601,6 +738,11 @@ static int recv_exact(int fd, unsigned char* buf, int n) {
 
 void PortRelay::socks5ListenLoop() {
     while (!stop_.load()) {
+        // If daemon is alive and tracked by monitorBackend, skip bind
+        if (backendPid_ > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+        }
         listenFd_ = createListener();
             if (listenFd_ < 0) {
                 if (stop_.load()) break;
@@ -815,7 +957,14 @@ while (!stop_.load() && backendPid_ != 0) {
             if (stop_.load()) break;
         }
 
-        std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
+        // If monitorBackend is tracking a live daemon, skip re-listen.
+// Wait for idle timeout -> gracefulStop -> daemon exit -> backendPid_ = 0.
+if (backendPid_ > 0) {
+    std::cout << "  [" << name_ << "] daemon alive (PID=" << backendPid_ << "), skipping re-listen, waiting for idle timeout" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    continue;
+}
+std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
 }
 
@@ -848,6 +997,11 @@ void PortRelay::mixedListenLoop() {
 
     // 主循环（hold_port=true 和 hold_port=false 共用）
     while (!stop_.load()) {
+        // If daemon is alive and tracked by monitorBackend, skip bind
+        if (backendPid_ > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+        }
         listenFd_.store(createListener());
             if (listenFd_.load() < 0) {
                 if (stop_.load()) break;
@@ -961,6 +1115,11 @@ void PortRelay::mixedListenLoop() {
             if (port > 0 && isPortBound((uint16_t)port)) {
                 std::cout << "  [" << name_ << "] port still in use (child alive), waiting for release" << std::endl;
                 while (!stop_.load()) {
+                    // If monitorBackend found the daemon process, stop waiting
+                    if (backendPid_ > 0) {
+                        std::cout << "  [" << name_ << "] daemon process tracked (PID=" << backendPid_ << "), stopping wait" << std::endl;
+                        break;
+                    }
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                     if (!isPortBound((uint16_t)port)) {
                         std::cout << "  [" << name_ << "] port released" << std::endl;
@@ -971,7 +1130,14 @@ void PortRelay::mixedListenLoop() {
             }
         }
 
-        std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
+        // If monitorBackend is tracking a live daemon, skip re-listen.
+// Wait for idle timeout -> gracefulStop -> daemon exit -> backendPid_ = 0.
+if (backendPid_ > 0) {
+    std::cout << "  [" << name_ << "] daemon alive (PID=" << backendPid_ << "), skipping re-listen, waiting for idle timeout" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    continue;
+}
+std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
 }
 
