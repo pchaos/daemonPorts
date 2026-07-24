@@ -519,6 +519,7 @@ void PortRelay::monitorBackend() {
                     std::cout << "  [" << name_ << "] 检测到 daemon 进程 (PID=" << realPid
                               << ")，更新后端 PID" << std::endl;
                     backendPid_ = realPid;
+                    lastActiveTime_ = time(nullptr);  // 重置空闲超时计时
                     continue;  // 继续监控新 PID
                 }
             }
