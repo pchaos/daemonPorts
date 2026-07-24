@@ -12,6 +12,7 @@
 set -euo pipefail
 
 MODE="${1:-release}"
+SKIP_BUILD="${2:-}"  # 传 --skip-build 跳过编译（sudo 重跑时自动使用）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BINARY_SRC=""
@@ -30,43 +31,74 @@ info()  { echo -e "${GREEN}==>${NC} $*"; }
 warn()  { echo -e "${YELLOW}==>${NC} $*"; }
 error() { echo -e "${RED}==>${NC} $*"; }
 
-# ── 检查 root ─────────────────────────────────────
-if [ "$(id -u)" -ne 0 ]; then
-  # 如果没 root，用 sudo 重跑自己
-  exec sudo "$0" "$@"
+# ── 步骤1: 编译（普通用户，不 sudo）───────────────
+if [ "$SKIP_BUILD" != "--skip-build" ]; then
+  info "步骤1: 编译 gatekeeper（$MODE 模式，带 systemd 支持）..."
+
+  cd "$PROJECT_DIR"
+
+  # 1a. 检查 xmake
+  if ! command -v xmake &>/dev/null; then
+    error "xmake 未安装。请先安装:"
+    error "  curl -fsSL https://xmake.io/install.sh | bash"
+    exit 1
+  fi
+  info "  xmake 版本: $(xmake --version 2>&1 | head -1)"
+
+  # 1b. 清理旧缓存，配置编译选项
+  info "  配置 xmake（$MODE 模式，HAVE_SYSTEMD=y）..."
+  xmake f -c -m "$MODE" --HAVE_SYSTEMD=y 2>&1 | sed 's/^/    /'
+  if [ $? -ne 0 ]; then
+    error "xmake 配置失败"
+    exit 1
+  fi
+
+  # 1c. 编译
+  info "  编译中..."
+  xmake 2>&1 | sed 's/^/    /'
+  if [ $? -ne 0 ]; then
+    error "xmake 编译失败"
+    exit 1
+  fi
+  info "  编译完成"
+
+  # 1d. 确定构建产物路径
+  PLAT="linux"
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    x86_64)  ARCH="x86_64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    *)       ARCH="$(uname -m)" ;;
+  esac
+  BUILD_DIR="$PROJECT_DIR/build/$PLAT/$ARCH/$MODE"
+
+  # 优先用带 systemd 的版本
+  BINARY_SRC="$BUILD_DIR/gatekeeper-systemd"
+  if [ ! -f "$BINARY_SRC" ]; then
+    BINARY_SRC="$BUILD_DIR/gatekeeper"
+  fi
+
+  if [ ! -f "$BINARY_SRC" ]; then
+    error "找不到编译产物"
+    error "  预期路径: $BUILD_DIR/gatekeeper"
+    error "  目录内容:"
+    ls -la "$BUILD_DIR/" 2>/dev/null | sed 's/^/    /' || error "  目录不存在"
+    exit 1
+  fi
+
+  # 1e. 显示产物信息
+  BINARY_SIZE=$(du -h "$BINARY_SRC" | cut -f1)
+  BINARY_MTIME=$(stat -c '%y' "$BINARY_SRC" 2>/dev/null | cut -d. -f1)
+  info "  编译产物: $BINARY_SRC"
+  info "    大小: $BINARY_SIZE  修改时间: $BINARY_MTIME"
+
+  # 编译完成，提权执行安装步骤
+  exec sudo "$0" "$MODE" --skip-build
 fi
 
-# ── 步骤1: 编译 ───────────────────────────────────
-info "步骤1: 编译 gatekeeper（$MODE 模式，带 systemd 支持）..."
-
+# ── 以下步骤以 root 运行 ──────────────────────────
+BINARY_SRC=""
 cd "$PROJECT_DIR"
-
-# 1a. 检查 xmake
-if ! command -v xmake &>/dev/null; then
-  error "xmake 未安装。请先安装:"
-  error "  curl -fsSL https://xmake.io/install.sh | bash"
-  exit 1
-fi
-info "  xmake 版本: $(xmake --version 2>&1 | head -1)"
-
-# 1b. 清理旧缓存，配置编译选项
-info "  配置 xmake（$MODE 模式，HAVE_SYSTEMD=y）..."
-xmake f -c -m "$MODE" -D HAVE_SYSTEMD=y 2>&1 | sed 's/^/    /'
-if [ $? -ne 0 ]; then
-  error "xmake 配置失败"
-  exit 1
-fi
-
-# 1c. 编译
-info "  编译中..."
-xmake 2>&1 | sed 's/^/    /'
-if [ $? -ne 0 ]; then
-  error "xmake 编译失败"
-  exit 1
-fi
-info "  编译完成"
-
-# 1d. 确定构建产物路径
 PLAT="linux"
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -75,26 +107,8 @@ case "$ARCH" in
   *)       ARCH="$(uname -m)" ;;
 esac
 BUILD_DIR="$PROJECT_DIR/build/$PLAT/$ARCH/$MODE"
-
-# 优先用带 systemd 的版本
 BINARY_SRC="$BUILD_DIR/gatekeeper-systemd"
-if [ ! -f "$BINARY_SRC" ]; then
-  BINARY_SRC="$BUILD_DIR/gatekeeper"
-fi
-
-if [ ! -f "$BINARY_SRC" ]; then
-  error "找不到编译产物"
-  error "  预期路径: $BUILD_DIR/gatekeeper"
-  error "  目录内容:"
-  ls -la "$BUILD_DIR/" 2>/dev/null | sed 's/^/    /' || error "  目录不存在"
-  exit 1
-fi
-
-# 1e. 显示产物信息
-BINARY_SIZE=$(du -h "$BINARY_SRC" | cut -f1)
-BINARY_MTIME=$(stat -c '%y' "$BINARY_SRC" 2>/dev/null | cut -d. -f1)
-info "  编译产物: $BINARY_SRC"
-info "    大小: $BINARY_SIZE  修改时间: $BINARY_MTIME"
+[ -f "$BINARY_SRC" ] || BINARY_SRC="$BUILD_DIR/gatekeeper"
 
 # ── 步骤2: 停止服务 ───────────────────────────────
 info "步骤2: 停止 $SERVICE_NAME 服务..."
