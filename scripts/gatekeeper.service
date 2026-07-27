@@ -39,16 +39,15 @@ Restart=on-failure
 RestartSec=5s
 
 # ── 资源限制 ──────────────────────────────────
-LimitNOFILE=65536          # 最大文件描述符数（每端口至少 2 个 socket）
-LimitNPROC=1024            # 最大进程数（后端程序也算在内）
+LimitNOFILE=65536
+LimitNPROC=1024
 
 # ── 安全加固 ──────────────────────────────────
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
+ProtectSystem=full
+ProtectHome=read-only
 PrivateTmp=yes
-# 如果后端程序需要读写特定目录，改用 ProtectSystem=full
-# 或通过 ReadWritePaths= 放行
+ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router
 
 # ── 日志（默认走 journald）───────────────────
 StandardOutput=journal
