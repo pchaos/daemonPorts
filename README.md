@@ -55,8 +55,15 @@ daemonPorts/
 │   ├── test_port_group.cpp  # 分组协调测试
 │   ├── test_tcp_monitor.cpp # TCP 监控测试
 │   └── test_idle.cpp        # 空闲超时测试
+├── scripts/
+│   ├── build-arm64.sh        # ARM64 交叉编译脚本
+│   ├── compile.sh            # 编译脚本
+│   ├── deploy-arm64.sh       # ARM64 部署脚本
+│   ├── install-service.sh    # systemd 服务安装脚本
+│   ├── update-local.sh       # 本地更新脚本
+│   └── gatekeeper.service    # systemd 服务模板
+├── CONFIG.md             # 配置说明文档（含所有模式详细配置）
 ├── xmake.lua            # xmake 构建脚本（多平台/多架构）
-├── gatekeeper.service   # systemd 服务模板
 ├── gatekeeper-config.json # 示例配置
 ├── start-deeptutor.sh   # deeptutor 容器启动脚本
 └── .github/workflows/build.yml  # GitHub Actions CI/CD
@@ -163,154 +170,15 @@ xmake
 
 ## 配置
 
-编辑配置文件（如 `gatekeeper-config.json`）：
+详细配置说明请参见 [CONFIG.md](CONFIG.md)，包含：
 
-```json
-{
-  "ports": [
-    {
-      "name": "web-service",
-      "listen": ":3000",
-      "command": "./web-app --port 3000",
-      "delay": 5000,
-      "refresh_seconds": 3,
-      "retry_seconds": 10,
-      "max_retry_seconds": 300,
-      "auto_restart": true,
-      "stack_size": 512,
-      "monitor": {
-        "enabled": true,
-        "interval_seconds": 60
-      }
-    },
-    {
-      "name": "api-service",
-      "listen": ":4000",
-      "command": "./api-server --port 4000",
-      "delay": 5000,
-      "auto_restart": false
-    }
-  ]
-}
-```
-```json
-{
-  "ports": [
-    {
-      "name": "redis-node-1",
-      "listen": ":6379",
-      "command": "./redis-server --port 6379",
-      "group": "redis-cluster"
-    },
-    {
-      "name": "redis-node-2",
-      "listen": ":6380",
-      "command": "./redis-server --port 6380",
-      "group": "redis-cluster"
-    }
-  ]
-}
-```
-
-### 配置项说明
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `name` | `listen` 值 | 端口名称，用于日志标识和"xxx 启动中"页面 |
-| `stop_command` | `` (empty) | 后端优雅关闭命令（可选） |
-| `idle_minutes` | `20` | 空闲超时分钟数，监控启用后空闲超时的端口会自动关闭后端 |
-| `enabled` | `true` | 是否启用此端口，设为 `false` 可临时关闭而不删除配置 |
-| `listen` | - | 门卫/后端监听地址，如 `:3000`（门卫先占，后端就绪后移交） |
-| `command` | - | 启动后端程序的 shell 命令（`hold_port: true` 模式下可选，由协议各自提供） |
-| `group` | `` (empty) | 可选字符串，默认空，定义该端口所属的组名，用于 PortGroup 关联 |
-| `delay` | `5000` | 等待后端就绪的超时时间(ms) |
-| `stack_size` | `512` | 该端口的线程栈大小(KB)，默认 512KB |
-| `refresh_seconds` | `5` | 启动页自动刷新的间隔(秒) |
-| `retry_seconds` | `10` | `auto_restart: true` 时，绑定失败后的初始重试间隔(秒) |
-| `max_retry_seconds` | `300` | `auto_restart: true` 时，惩罚机制的最大重试间隔上限(秒)，超过此值保持不变 |
-| `auto_restart` | `false` | 后端退出后，下次访问时是否自动重启 |
-| `mode` | `"simple"` | 工作模式：`"simple"`（引导释放）、`"mixed"`（混合模式）或 `"proxy"`（SOCKS5 代理） |
-| `auth` | `{}` | `proxy` 模式的认证配置，详见下方说明 |
-| `http_target` | `` | `proxy` 模式下 SOCKS5 连接转发的 HTTP 后端地址，如 `127.0.0.1:8080` |
-| `hold_port` | `false` | `mixed` 模式下是否持住端口：`false`=引导后释放，`true`=常驻代理 |
-| `protocols` | `[]` | `mixed` 模式的协议列表，详见下方说明 |
-| `monitor` | - | TCP 连接监控配置，详见下方说明 |
-
-### TCP 连接监控
-
-gatekeeper 支持通过 NETLINK_INET_DIAG 实时采样端口的 TCP 连接状态（仅 Linux 平台）。
-
-```json
-{
-  "ports": [
-    {
-      "listen": ":3000",
-      "command": "./app",
-      "monitor": {
-        "enabled": true,
-        "interval_seconds": 60
-      }
-    }
-  ]
-}
-```
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `monitor.enabled` | `false` | 是否启用 TCP 连接监控 |
-| `monitor.interval_seconds` | `60` | 采样间隔（秒） |
-| `monitor.log_dedup` | `"skip"` | 日志去重：`"skip"`（连接数不变不打印）、`"throttle"`（每5轮一次）、`"off"`（始终打印） |
-
-启用后，gatekeeper 会在一个统一监控线程中轮询所有启用了监控的端口，查询其 TCP 连接状态并更新活跃时间戳。日志示例：
-
-```
-TCP 连接监控已启动，轮询间隔 60 秒
-  [web-service] ACTIVE=1  connections=3  non-listen=2
-  [api-service] ACTIVE=0  connections=1  non-listen=0 (idle)
-```
-
-### proxy 模式（SOCKS5 代理）
-
-proxy 模式将 gatekeeper 作为 SOCKS5 代理服务器运行。客户端通过 SOCKS5 协议连接 gatekeeper，gatekeeper 完成握手后建立 TCP 隧道将流量转发到指定的 HTTP 后端。
-
-**配置示例：**
-
-```json
-{
-  "ports": [
-    {
-      "name": "socks5-proxy",
-      "listen": ":1080",
-      "mode": "proxy",
-      "auth": {
-        "type": "userpass",
-        "username": "admin",
-        "password": "secret123"
-      },
-      "http_target": "127.0.0.1:8080"
-    }
-  ]
-}
-```
-
-**认证配置：**
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `auth.type` | `"none"` | 认证类型：`"none"`（无认证）或 `"userpass"`（用户名密码） |
-| `auth.username` | `` | USERPASS 认证的用户名（`type` 为 `"userpass"` 时必填） |
-| `auth.password` | `` | USERPASS 认证的密码（`type` 为 `"userpass"` 时必填） |
-| `http_target` | `` | SOCKS5 连接转发的 HTTP 后端地址，格式为 `host:port` |
-
-**工作模式：**
-
-1. **无认证**（默认）：客户端直接连接，gatekeeper 接受任何 SOCKS5 请求并转发到 `http_target`
-2. **USER/PASS 认证**：客户端必须先提供正确的用户名密码，验证通过后才允许连接
-
-**使用场景：**
-- 将 SOCKS5 代理请求转发到本地 HTTP 服务
-- 在受限网络环境下通过 SOCKS5 代理访问内部服务
-- 配合认证机制控制代理访问权限
+- 所有配置项字段表（类型、默认值、说明）
+- 三种工作模式（simple / mixed / proxy）的完整配置示例
+- mixed 模式的协议检测机制和 `hold_port` 两种行为
+- TCP 连接监控配置
+- 认证配置（无认证 / USER+PASS）
+- 端口分组、优雅关闭、重试惩罚机制
+- 常见问题与注意事项
 
 ## 使用
 
@@ -336,7 +204,7 @@ echo '{"ports":[{"listen":":1080","mode":"proxy","http_target":"127.0.0.1:8080"}
 ```bash
 # 1. 复制二进制和服务文件
 cp build/linux/x86_64/release/gatekeeper /usr/local/bin/
-cp gatekeeper.service /etc/systemd/system/
+cp scripts/gatekeeper.service /etc/systemd/system/
 cp gatekeeper-config.json /usr/local/etc/gatekeeper/config.json
 
 # 2. 修改 service 文件中的 ExecStart 路径（如需要）
