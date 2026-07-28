@@ -2,7 +2,7 @@
 #define GATEKEEPER_RELAY_H
 
 #include "config.h"
-
+#include "relay_platform.h"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -11,18 +11,10 @@
 #include <chrono>
 #include <ctime>
 #include <mutex>
-#ifndef _WIN32
-#include <pthread.h>
-#endif
 
 class PortGroup; // forward declaration for grouping
 
-// Windows 兼容：pid_t 在 MSVC 中未定义
-#ifndef _WIN32
-#include <sys/types.h>
-#else
-typedef int pid_t;
-#endif
+
 
 class PortRelay {
     friend class PortGroup;
@@ -55,13 +47,8 @@ class PortRelay {
     std::atomic<pid_t> backendPid_{0};
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
-#ifndef _WIN32
-    pthread_t listenThread_ = 0;
-    pthread_t monitorThread_ = 0;
-#else
-    std::thread listenThread_;
-    std::thread monitorThread_;
-#endif
+    PlatformThread listenThread_{};
+    PlatformThread monitorThread_{};
 
     // hold_port=true 时：每个协议的后端状态
     struct BackendState {
@@ -82,11 +69,7 @@ class PortRelay {
         BackendState& operator=(const BackendState&) = delete;
     };
     std::vector<BackendState> backends_;
-#ifndef _WIN32
-    pthread_t proxyMonitorThread_ = 0;
-#else
-    std::thread proxyMonitorThread_;
-#endif
+    PlatformThread proxyMonitorThread_{};
 
     // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
     int tcpMonitorInterval_ = 0;
@@ -105,9 +88,6 @@ class PortRelay {
     time_t lastSampleTime_ = 0;  // 上次采样时间（按各自 interval 控制频率）
 
     // 线程创建封装：用 pthread_attr_setstacksize 控制栈大小
-#ifndef _WIN32
-    void createThread(pthread_t& thread, void* (*func)(void*), void* arg);
-#endif
 
     // 通用的
     int createListener();

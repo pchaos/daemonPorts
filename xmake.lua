@@ -1,5 +1,5 @@
 set_xmakever("2.8.0")
-local GATEKEEPER_VERSION = "1.0.4"
+local GATEKEEPER_VERSION = "1.0.5"
 set_version(GATEKEEPER_VERSION)
 
 -- ============================================================
@@ -19,7 +19,16 @@ option("HAVE_SYSTEMD")
 target("gatekeeper")
     set_kind("binary")
     set_languages("c++11")
-    add_files("src/*.cpp")
+    if is_plat("windows", "mingw") then
+        add_files("src/relay_win.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+    else
+        add_files("src/relay_posix.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        if is_plat("linux") then
+            add_files("src/relay_linux.cpp")
+        end
+    end
     add_defines("GATEKEEPER_VERSION=\"" .. GATEKEEPER_VERSION .. "\"")
     add_includedirs("src")
 
@@ -74,7 +83,16 @@ target("gatekeeper")
 target("gatekeeper-systemd")
     set_kind("binary")
     set_languages("c++11")
-    add_files("src/*.cpp")
+    if is_plat("windows", "mingw") then
+        add_files("src/relay_win.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+    else
+        add_files("src/relay_posix.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        if is_plat("linux") then
+            add_files("src/relay_linux.cpp")
+        end
+    end
     add_defines("GATEKEEPER_VERSION=\"" .. GATEKEEPER_VERSION .. "\"")
     add_includedirs("src")
 
@@ -126,6 +144,14 @@ target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
     add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_retry.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp")
+    if is_plat("windows", "mingw") then
+        add_files("src/relay_win.cpp")
+    else
+        add_files("src/relay_posix.cpp")
+        if is_plat("linux") then
+            add_files("src/relay_linux.cpp")
+        end
+    end
     add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp")
     add_includedirs("test", "src")
 

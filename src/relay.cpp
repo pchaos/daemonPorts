@@ -11,45 +11,16 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
-
-#ifndef _WIN32
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <signal.h>
 #include <netdb.h>
-#include <dirent.h>
-#else
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-// Windows 兼容宏
-#define close(fd) closesocket(fd)
-#define SHUT_WR SD_SEND
-#define SHUT_RDWR SD_BOTH
-#define perror(msg) fprintf(stderr, msg ": %d\n", WSAGetLastError())
-#define usleep(us) Sleep((us)/1000)
-#define popen _popen
-#define pclose _pclose
-#define read(fd, buf, n) recv(fd, (char*)(buf), (int)(n), 0)
-#define write(fd, buf, n) send(fd, (const char*)(buf), (int)(n), 0)
-#define setsockopt(fd, lvl, opt, val, len) ::setsockopt(fd, lvl, opt, (const char*)(val), (int)(len))
-// ssize_t 在 MSVC 中未定义
-#ifndef ssize_t
-#define ssize_t int
-#endif
-// recv/send 在 Windows 上取 char* 不是 void*/unsigned char*
-// 使用宏包装，注意宏展开后不再递归
-#ifdef _WIN32
-#define recv(s, buf, len, flags) ::recv(s, (char*)(buf), (int)(len), flags)
-#define send(s, buf, len, flags) ::send(s, (const char*)(buf), (int)(len), flags)
-#endif
-#endif
+#include <signal.h>
+
+
+
 
 // SOCK_CLOEXEC — macOS 10.6 及更早版本未定义
 #ifndef SOCK_CLOEXEC
@@ -58,178 +29,9 @@
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
 // 检测端口是否被占用，返回占用进程的 PID（找不到返回 0）
-#ifdef __linux__
-static pid_t findPidUsingPort(uint16_t port) {
-    // 方案1: ss -tlnp 解析 pid= 字段
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "ss -tlnp 2>/dev/null | grep ':%u '", port);
-    FILE* p = popen(cmd, "r");
-    if (p) {
-        char buf[512];
-        if (fgets(buf, sizeof(buf), p)) {
-            pclose(p);
-            char* pidStr = strstr(buf, "pid=");
-            if (pidStr) {
-                pid_t pid = (pid_t)strtol(pidStr + 4, nullptr, 10);
-                if (pid > 0) return pid;
-            }
-        } else {
-            pclose(p);
-        }
-    }
 
-    // 方案2: /proc/net/tcp + /proc/*/fd/
-    char hexPort[16];
-    snprintf(hexPort, sizeof(hexPort), "%04X", port);
-    std::ifstream proc("/proc/net/tcp");
-    std::string line;
-    while (std::getline(proc, line)) {
-        std::istringstream iss(line);
-        std::string sl, localAddr;
-        if (!(iss >> sl >> localAddr)) continue;
-        if (localAddr.size() < 5) continue;
-        std::string addrPort = localAddr.substr(localAddr.find(':') + 1);
-        if (addrPort != hexPort) continue;
 
-        // 跳过不需要的字段，找到 inode（第9列）
-        std::string token;
-        for (int i = 0; i < 2; i++) iss >> token; // skip rem_address, st
-        for (int i = 0; i < 6; i++) iss >> token;
-        std::string inodeStr = token;
 
-        DIR* procDir = opendir("/proc");
-        if (!procDir) return 0;
-        struct dirent* entry;
-        while ((entry = readdir(procDir)) != nullptr) {
-            if (entry->d_type != DT_DIR) continue;
-            char* end;
-            long pid = strtol(entry->d_name, &end, 10);
-            if (*end != '\0') continue;
-
-            char fdPath[256];
-            snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
-            DIR* fdDir = opendir(fdPath);
-            if (!fdDir) continue;
-            struct dirent* fdEntry;
-            while ((fdEntry = readdir(fdDir)) != nullptr) {
-                char linkPath[256];
-                snprintf(linkPath, sizeof(linkPath), "/proc/%ld/fd/%s", pid, fdEntry->d_name);
-                char linkTarget[256];
-                ssize_t len = readlink(linkPath, linkTarget, sizeof(linkTarget) - 1);
-                if (len > 0) {
-                    linkTarget[len] = '\0';
-                    if (strncmp(linkTarget, "socket:[", 8) == 0) {
-                        char* end2;
-                        long inode = strtol(linkTarget + 8, &end2, 10);
-                        if (*end2 == ']' && inode == strtol(inodeStr.c_str(), nullptr, 10)) {
-                            closedir(fdDir);
-                            closedir(procDir);
-                            return (pid_t)pid;
-                        }
-                    }
-                }
-            }
-            closedir(fdDir);
-        }
-        closedir(procDir);
-        break;
-    }
-    return 0;
-}
-#endif
-
-#ifdef __linux__
-static std::string findProcessUsingPort(uint16_t port) {
-    // 方案1: ss -tlnp（能看到同用户进程的进程名）
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "ss -tlnp 2>/dev/null | grep ':%u '", port);
-    FILE* p = popen(cmd, "r");
-    if (p) {
-        char buf[512];
-        if (fgets(buf, sizeof(buf), p)) {
-            pclose(p);
-            std::string result(buf);
-            if (!result.empty() && result.back() == '\n') result.pop_back();
-            return result.substr(0, 80);
-        }
-        pclose(p);
-    }
-
-    // 方案2: 读取 /proc/net/tcp 查找 inode，再扫描 /proc/*/fd 匹配进程名
-    // 这对所有进程可见（包括 root 进程）
-    char hexPort[16];
-    snprintf(hexPort, sizeof(hexPort), "%04X", port);
-    std::ifstream proc("/proc/net/tcp");
-    std::string line;
-    while (std::getline(proc, line)) {
-        // 格式: sl  local_address  rem_address  st  ...  inode
-        // local_address: 00000000:4EA0
-        std::istringstream iss(line);
-        std::string sl, localAddr;
-        if (!(iss >> sl >> localAddr)) continue;
-        if (localAddr.size() < 5) continue;
-        std::string addrPort = localAddr.substr(localAddr.find(':') + 1);
-        if (addrPort != hexPort) continue;
-
-        // 找到 inode（第9列，1-indexed，跳过 sl,local,rem,st,tx,rx,tr,tm）
-        // 格式: 0: 00000000:4EA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 123456
-        std::string token;
-        for (int i = 0; i < 2; i++) iss >> token; // skip rem_address, st
-        // st is 0A for LISTEN
-        // skip tx_queue/rx_queue, tr, tm->when, retrnsmt, uid, timeout
-        for (int i = 0; i < 6; i++) iss >> token;
-        std::string inodeStr = token; // inode is the 9th column (0-indexed from rem_address)
-
-        // 扫描 /proc/*/fd/ 查找 inode
-        DIR* procDir = opendir("/proc");
-        if (!procDir) return "";
-        struct dirent* entry;
-        while ((entry = readdir(procDir)) != nullptr) {
-            if (entry->d_type != DT_DIR) continue;
-            char* end;
-            long pid = strtol(entry->d_name, &end, 10);
-            if (*end != '\0') continue;
-
-            char fdPath[256];
-            snprintf(fdPath, sizeof(fdPath), "/proc/%ld/fd", pid);
-            DIR* fdDir = opendir(fdPath);
-            if (!fdDir) continue;
-            struct dirent* fdEntry;
-            while ((fdEntry = readdir(fdDir)) != nullptr) {
-                char linkPath[256];
-                snprintf(linkPath, sizeof(linkPath), "/proc/%ld/fd/%s", pid, fdEntry->d_name);
-                char linkTarget[256];
-                ssize_t len = readlink(linkPath, linkTarget, sizeof(linkTarget) - 1);
-                if (len > 0) {
-                    linkTarget[len] = '\0';
-                    // socket inode 格式: socket:[123456]
-                    if (strncmp(linkTarget, "socket:[", 8) == 0) {
-                        char* end2;
-                        long inode = strtol(linkTarget + 8, &end2, 10);
-                        if (*end2 == ']' && inode == strtol(inodeStr.c_str(), nullptr, 10)) {
-                            closedir(fdDir);
-                            closedir(procDir);
-                            char cmdlinePath[256];
-                            snprintf(cmdlinePath, sizeof(cmdlinePath), "/proc/%ld/comm", pid);
-                            std::ifstream comm(cmdlinePath);
-                            std::string commName;
-                            std::getline(comm, commName);
-                            if (!commName.empty()) {
-                                return commName + " (PID=" + std::to_string(pid) + ")";
-                            }
-                            return "PID=" + std::to_string(pid);
-                        }
-                    }
-                }
-            }
-            closedir(fdDir);
-        }
-        closedir(procDir);
-        break;
-    }
-    return "";
-}
-#endif
 
 bool PortRelay::isPortBound(uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -253,12 +55,10 @@ void PortRelay::logBindFailed() {
         msg += "端口被占用";
         int port = monitorPort();
         if (port > 0) {
-#ifdef __linux__
-            std::string occupant = findProcessUsingPort(static_cast<uint16_t>(port));
-            if (!occupant.empty()) {
-                msg += " by " + occupant;
-            }
-#endif
+    std::string occupant = platform::findProcessUsingPort(static_cast<uint16_t>(port));
+    if (!occupant.empty()) {
+        msg += " by " + occupant;
+    }
         }
     } else {
         msg += strerror(errno);
@@ -323,27 +123,7 @@ int PortRelay::createListener() {
 }
 
 pid_t PortRelay::launchBackend() {
-#ifndef _WIN32
-    pid_t pid = fork();
-    if (pid < 0) { perror("fork"); return -1; }
-    if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", command_.c_str(), (char*)NULL);
-        perror("execl");
-        _exit(127);
-    }
-    return pid;
-#else
-    STARTUPINFOA si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(si);
-    BOOL ok = CreateProcessA(
-        NULL, (LPSTR)command_.c_str(), NULL, NULL, FALSE,
-        CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-    if (!ok) return -1;
-    CloseHandle(pi.hThread);
-    // Store process handle for later use (we use pi.dwProcessId as pid)
-    return (pid_t)pi.dwProcessId;
-#endif
+    return platform::launchProcess(command_);
 }
 
 bool PortRelay::waitForBackend(int ms) {
@@ -534,18 +314,16 @@ int PortRelay::monitorPort() const {
 void PortRelay::monitorBackend() {
     while (!stop_.load()) {
         if (backendPid_ > 0) {
-#ifndef _WIN32
-            int status;
-            pid_t ret = waitpid(backendPid_, &status, 0);
-            if (ret < 0 && errno == ECHILD) {
-                // 非子进程（daemon 化进程），轮询端口状态
+            pid_t ret = platform::waitChild(backendPid_);
+            if (ret < 0 && !platform::isChildAlive(backendPid_)) {
+                // Non-child process (daemonized), poll port
                 int port = monitorPort();
                 if (port > 0) {
                     std::cout << "  [" << name_ << "] 监控 daemon 进程 (PID=" << backendPid_
                               << ")，轮询端口 " << port << std::endl;
                     while (!stop_.load()) {
                         std::this_thread::sleep_for(std::chrono::seconds(5));
-                        if (!isPortBound((uint16_t)port)) {
+                        if (!platform::isProcessRunning(backendPid_) && !isPortBound((uint16_t)port)) {
                             std::cout << "  [" << name_ << "] daemon 进程已退出，端口已释放" << std::endl;
                             break;
                         }
@@ -557,53 +335,27 @@ void PortRelay::monitorBackend() {
                 std::cout << "  [" << name_ << "] 将在下次连接时重启" << std::endl;
                 continue;
             }
-            // 直接子进程（cli.js 等）已退出，检查端口是否被 daemon 化进程持有
+            // Direct child exited, check if daemonized process holds the port
             int port = monitorPort();
             pid_t realPid = 0;
             if (port > 0) {
-                {
-                    // 总等待时间 = 1.5 倍 delayMs_，每 2 秒检测一次
-                    int maxRetries = (int)((delayMs_ * 1.5) / 2000);
-                    if (maxRetries < 1) maxRetries = 1;
-                    for (int retry = 0; retry < maxRetries; retry++) {
-#ifdef __linux__
-                        realPid = findPidUsingPort((uint16_t)port);
-                        if (realPid > 0 && realPid != backendPid_) break;
-#endif
-                        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-                    }
+                int maxRetries = (int)((delayMs_ * 1.5) / 2000);
+                if (maxRetries < 1) maxRetries = 1;
+                for (int retry = 0; retry < maxRetries; retry++) {
+                    realPid = platform::findPidUsingPort((uint16_t)port);
+                    if (realPid > 0 && realPid != backendPid_) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                 }
                 if (realPid > 0 && realPid != backendPid_) {
                     std::cout << "  [" << name_ << "] 检测到 daemon 进程 (PID=" << realPid
                               << ")，更新后端 PID" << std::endl;
                     backendPid_ = realPid;
-                    lastActiveTime_ = time(nullptr);  // 重置空闲超时计时
-                    continue;  // 继续监控新 PID
+                    lastActiveTime_ = time(nullptr);
+                    continue;
                 }
             }
             std::cout << "  [" << name_ << "] 后端已退出" << std::endl;
             backendPid_ = 0;
-#else
-            // Windows: 用 WaitForSingleObject 检查进程是否退出
-            HANDLE hProc = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, (DWORD)backendPid_.load());
-            if (hProc) {
-                DWORD waitRet = WaitForSingleObject(hProc, 200);
-                if (waitRet == WAIT_OBJECT_0) {
-                    // 进程已退出
-                    std::cout << "  [" << name_ << "] 后端已退出 (PID=" << backendPid_ << ")" << std::endl;
-                    backendPid_ = 0;
-                    CloseHandle(hProc);
-                } else {
-                    // 进程仍在运行
-                    CloseHandle(hProc);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                    continue;
-                }
-            } else {
-                // 无法打开进程（可能已退出或权限不足）
-                backendPid_ = 0;
-            }
-#endif
             if (!autoRestart_ || stop_.load()) break;
             std::cout << "  [" << name_ << "] 将在下次连接时重启" << std::endl;
         }
@@ -785,29 +537,11 @@ void PortRelay::proxyMonitorLoop() {
         for (auto& b : backends_) {
             if (b.pid > 0) {
                 anyAlive = true;
-#ifndef _WIN32
-                int status;
-                pid_t result = waitpid(b.pid, &status, WNOHANG);
-                if (result == b.pid) {
-                    std::cout << "  [" << name_ << "] " << b.type << " 后端已退出" << std::endl;
-                    b.pid = 0;
-                    b.ready->store(false);
-                }
-#else
-                HANDLE hProc = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)b.pid);
-                if (hProc) {
-                    DWORD waitRet = WaitForSingleObject(hProc, 0);
-                    if (waitRet == WAIT_OBJECT_0) {
-                        std::cout << "  [" << name_ << "] " << b.type << " 后端已退出" << std::endl;
-                        b.pid = 0;
-                        b.ready->store(false);
-                    }
-                    CloseHandle(hProc);
-                } else {
-                    b.pid = 0;
-                    b.ready->store(false);
-                }
-#endif
+    if (!platform::isChildAlive(b.pid)) {
+        std::cout << "  [" << name_ << "] " << b.type << " 后端已退出" << std::endl;
+        b.pid = 0;
+        b.ready->store(false);
+    }
             }
         }
         if (!anyAlive) {
@@ -1236,63 +970,37 @@ std::cout << "  [" << name_ << "] 重新监听端口" << std::endl;
     }
 }
 
-#ifndef _WIN32
-void PortRelay::createThread(pthread_t& thread, void* (*func)(void*), void* arg) {
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, stackSize_ * 1024);
-    pthread_create(&thread, &attr, func, arg);
-    pthread_attr_destroy(&attr);
-}
-#endif
+
+
+
 
 void PortRelay::start() {
     if (mode_ == "mixed") {
-#ifndef _WIN32
-        createThread(listenThread_, [](void* arg) -> void* {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
             static_cast<PortRelay*>(arg)->mixedListenLoop();
             return nullptr;
-        }, this);
-#else
-        listenThread_ = std::thread(&PortRelay::mixedListenLoop, this);
-#endif
+        }, this, stackSize_);
         if (holdPort_) {
-#ifndef _WIN32
-            createThread(proxyMonitorThread_, [](void* arg) -> void* {
+            platform::createThread(proxyMonitorThread_, [] (void* arg) -> void* {
                 static_cast<PortRelay*>(arg)->proxyMonitorLoop();
                 return nullptr;
-            }, this);
-#else
-            proxyMonitorThread_ = std::thread(&PortRelay::proxyMonitorLoop, this);
-#endif
+            }, this, stackSize_);
         }
     } else if (mode_ == "proxy") {
-#ifndef _WIN32
-        createThread(listenThread_, [](void* arg) -> void* {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
             static_cast<PortRelay*>(arg)->socks5ListenLoop();
             return nullptr;
-        }, this);
-#else
-        listenThread_ = std::thread(&PortRelay::socks5ListenLoop, this);
-#endif
+        }, this, stackSize_);
     } else {
-#ifndef _WIN32
-        createThread(listenThread_, [](void* arg) -> void* {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
             static_cast<PortRelay*>(arg)->listenLoop();
             return nullptr;
-        }, this);
-#else
-        listenThread_ = std::thread(&PortRelay::listenLoop, this);
-#endif
+        }, this, stackSize_);
     }
-#ifndef _WIN32
-    createThread(monitorThread_, [](void* arg) -> void* {
+    platform::createThread(monitorThread_, [] (void* arg) -> void* {
         static_cast<PortRelay*>(arg)->monitorBackend();
         return nullptr;
-    }, this);
-#else
-    monitorThread_ = std::thread(&PortRelay::monitorBackend, this);
-#endif
+    }, this, stackSize_);
 }
 
 void PortRelay::stop() {
@@ -1305,44 +1013,21 @@ void PortRelay::stop() {
     }
     // Clean up simple / mixed+hold_port=false backend
     if (backendPid_ > 0) {
-#ifndef _WIN32
-        // Only send SIGTERM if the backend process is still alive
-        int status;
-        pid_t result = waitpid(backendPid_, &status, WNOHANG);
-        if (result == 0) { // still running
-            kill(backendPid_, SIGTERM);
-        }
-#else
-        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)backendPid_.load());
-        if (hProc) {
-            TerminateProcess(hProc, 1);
-            CloseHandle(hProc);
-        }
-#endif
+if (platform::isChildAlive(backendPid_)) {
+        platform::killProcess(backendPid_);
+    }
     }
     // Clean up mixed+hold_port=true multiple backends
     for (auto& b : backends_) {
         if (b.pid > 0) {
-#ifndef _WIN32
-            kill(b.pid, SIGTERM);
-#else
-            HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)b.pid);
-            if (hProc) {
-                TerminateProcess(hProc, 1);
-                CloseHandle(hProc);
-            }
-#endif
+if (platform::isChildAlive(b.pid)) {
+            platform::killProcess(b.pid);
+        }
         }
     }
-#ifndef _WIN32
-    if (listenThread_) pthread_join(listenThread_, nullptr);
-    if (monitorThread_) pthread_join(monitorThread_, nullptr);
-    if (proxyMonitorThread_) pthread_join(proxyMonitorThread_, nullptr);
-#else
-    if (listenThread_.joinable()) listenThread_.join();
-    if (monitorThread_.joinable()) monitorThread_.join();
-    if (proxyMonitorThread_.joinable()) proxyMonitorThread_.join();
-#endif
+platform::joinThread(listenThread_);
+    platform::joinThread(monitorThread_);
+    platform::joinThread(proxyMonitorThread_);
 }
 
 void PortRelay::signalStop() {
@@ -1362,44 +1047,17 @@ void PortRelay::gracefulStop() {
         system(stopCommand_.c_str());
         for (int i = 0; i < 30; ++i) {
             if (backendPid_ == 0) return; // monitorBackend may have cleared it
-#ifndef _WIN32
-            int status;
-            pid_t ret = waitpid(backendPid_, &status, WNOHANG);
-            if (ret == backendPid_) {
-                std::cout << "  [" << name_ << "] 后端已退出 (status=" << status << ")" << std::endl;
-                backendPid_ = 0;
-                return;
-            }
-#else
-            HANDLE hProc = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)backendPid_.load());
-            if (hProc) {
-                DWORD waitRet = WaitForSingleObject(hProc, 0);
-                if (waitRet == WAIT_OBJECT_0) {
-                    std::cout << "  [" << name_ << "] 后端已退出" << std::endl;
-                    backendPid_ = 0;
-                    CloseHandle(hProc);
-                    return;
-                }
-                CloseHandle(hProc);
-            } else {
-                backendPid_ = 0;
-                return;
-            }
-#endif
+if (!platform::isChildAlive(backendPid_)) {
+        std::cout << "  [" << name_ << "] 后端已退出" << std::endl;
+        backendPid_ = 0;
+        return;
+    }
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         std::cout << "  [" << name_ << "] 关闭命令超时，发送 SIGTERM" << std::endl;
     }
     // Fallback SIGTERM
-#ifndef _WIN32
-    kill(backendPid_, SIGTERM);
-#else
-    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)backendPid_.load());
-    if (hProc) {
-        TerminateProcess(hProc, 1);
-        CloseHandle(hProc);
-    }
-#endif
+platform::killProcess(backendPid_);
     std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
     backendPid_ = 0;
 }
