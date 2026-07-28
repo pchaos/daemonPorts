@@ -79,7 +79,7 @@ target("gatekeeper-systemd")
     add_includedirs("src")
 
     -- ── 始终启用 systemd（嵌入式 sd-daemon.h，无需链接 libsystemd）──
-    if not is_plat("windows") then
+    if not is_plat("windows", "mingw") then
         add_defines("HAVE_SYSTEMD")
     end
 
