@@ -12,6 +12,9 @@
 #include <cstring>   // memcpy
 #ifndef _WIN32
 #include <netinet/in.h>  // in6_addr, ntohs, sockaddr_in
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #endif
 
 // ── 一条 TCP 连接信息 ──
