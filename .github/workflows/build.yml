@@ -176,18 +176,14 @@ jobs:
           path: build/windows/${{ matrix.arch }}/*
 
   # ═══════════════════════════════════════════════════════════════════
-  # macOS (x86_64 + arm64) ── 原生构建
+  # macOS (arm64) ── Apple Silicon
   # ═══════════════════════════════════════════════════════════════════
   macos:
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            runner: macos-13       # Intel macOS
-          - arch: arm64
-            runner: macos-latest    # Apple Silicon
+        arch: [arm64]
     steps:
       - uses: actions/checkout@v4
 
