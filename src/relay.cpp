@@ -38,10 +38,16 @@
 #define pclose _pclose
 #define read(fd, buf, n) recv(fd, (char*)(buf), (int)(n), 0)
 #define write(fd, buf, n) send(fd, (const char*)(buf), (int)(n), 0)
-#define setsockopt(fd, lvl, opt, val, len) setsockopt(fd, lvl, opt, (const char*)(val), (int)(len))
+#define setsockopt(fd, lvl, opt, val, len) ::setsockopt(fd, lvl, opt, (const char*)(val), (int)(len))
 // ssize_t 在 MSVC 中未定义
 #ifndef ssize_t
 #define ssize_t int
+#endif
+// recv/send 在 Windows 上取 char* 不是 void*/unsigned char*
+// 使用宏包装，注意宏展开后不再递归
+#ifdef _WIN32
+#define recv(s, buf, len, flags) ::recv(s, (char*)(buf), (int)(len), flags)
+#define send(s, buf, len, flags) ::send(s, (const char*)(buf), (int)(len), flags)
 #endif
 // SOCK_CLOEXEC 在 Windows 上不存在
 #ifndef SOCK_CLOEXEC
