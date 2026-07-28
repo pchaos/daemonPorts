@@ -3,6 +3,9 @@
 #include <iostream>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <io.h>
+#define close(fd) closesocket(fd)
 #endif
 
 PortGroup::PortGroup(const std::string &name) : name_(name) {}
