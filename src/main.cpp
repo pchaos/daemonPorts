@@ -50,6 +50,17 @@ static void handleSignal(int) {
 	for (auto& r : g_relays) r->signalStop();
 }
 
+#ifdef _WIN32
+static BOOL WINAPI ctrlHandler(DWORD) {
+    g_stop.store(true);
+    for (auto& g : g_groups) {
+        if (g) g->signalStop();
+    }
+    for (auto& r : g_relays) r->signalStop();
+    return TRUE;
+}
+#endif
+
 // 统一 TCP 连接监控线程：轮询所有端口的连接状态并更新活跃时间戳
 static int gcd(int a, int b) {
     while (b) { int t = b; b = a % b; a = t; }
@@ -223,14 +234,7 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, handleSignal);
 #else
     // Windows: no SIGPIPE, use SetConsoleCtrlHandler for Ctrl+C
-    SetConsoleCtrlHandler([](DWORD) -> BOOL {
-        g_stop.store(true);
-        for (auto& g : g_groups) {
-            if (g) g->signalStop();
-        }
-        for (auto& r : g_relays) r->signalStop();
-        return TRUE;
-    }, TRUE);
+    SetConsoleCtrlHandler(ctrlHandler, TRUE);
 #endif
 
     std::cout << "门卫程序启动，管理 " << cfgs.size() << " 个端口:" << std::endl;

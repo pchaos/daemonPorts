@@ -49,7 +49,7 @@
 #define recv(s, buf, len, flags) ::recv(s, (char*)(buf), (int)(len), flags)
 #define send(s, buf, len, flags) ::send(s, (const char*)(buf), (int)(len), flags)
 #endif
-// SOCK_CLOEXEC 在 Windows 上不存在
+// SOCK_CLOEXEC 在 Windows 和旧版 macOS 上不存在
 #ifndef SOCK_CLOEXEC
 #define SOCK_CLOEXEC 0
 #endif
@@ -565,8 +565,10 @@ void PortRelay::monitorBackend() {
                     int maxRetries = (int)((delayMs_ * 1.5) / 2000);
                     if (maxRetries < 1) maxRetries = 1;
                     for (int retry = 0; retry < maxRetries; retry++) {
+#ifdef __linux__
                         realPid = findPidUsingPort((uint16_t)port);
                         if (realPid > 0 && realPid != backendPid_) break;
+#endif
                         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                     }
                 }
