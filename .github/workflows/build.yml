@@ -9,6 +9,9 @@ on:
     types: [published]
   workflow_dispatch:          # 手动触发
 
+permissions:
+  contents: write
+
 # ── 环境 ────────────────────────────────────────────────────────────
 env:
   XMAKE_GLOBALDIR: ${{ github.workspace }}/.xmake-global
