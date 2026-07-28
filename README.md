@@ -39,33 +39,37 @@
 ```
 daemonPorts/
 ├── src/
-│   ├── main.cpp        # 程序入口，统一监控线程
-│   ├── config.h/cpp     # 配置解析（JSON）
-│   ├── relay.h/cpp      # PortRelay 类，端口接力核心
-│   ├── port_group.h/cpp # PortGroup 类，多端口分组协调
-│   ├── tcp_monitor.h/cpp # TCP 连接监控（NETLINK_INET_DIAG）
-│   └── json.h/cpp       # 轻量 JSON 解析器
+│   ├── main.cpp              # 程序入口，统一监控线程
+│   ├── config.h/cpp           # 配置解析（JSON）
+│   ├── relay.h/cpp            # PortRelay 类，端口接力核心（平台无关）
+│   ├── relay_platform.h       # 平台抽象层接口 + 跨平台类型定义
+│   ├── relay_posix.cpp        # POSIX 实现（Linux / macOS / BSD）
+│   ├── relay_linux.cpp        # Linux 专用 procfs 端口检测
+│   ├── relay_win.cpp          # Windows 实现（Winsock / CreateProcess）
+│   ├── port_group.h/cpp       # PortGroup 类，多端口分组协调
+│   ├── tcp_monitor.h/cpp      # TCP 连接监控（NETLINK_INET_DIAG）
+│   └── json.h/cpp             # 轻量 JSON 解析器
 ├── test/
-│   ├── doctest.h        # 单文件测试框架
-│   ├── test_main.cpp        # 测试入口
-│   ├── test_json.cpp        # JSON 解析测试
-│   ├── test_config.cpp      # 配置解析测试
-│   ├── test_relay.cpp       # 端口接力测试
-│   ├── test_retry.cpp       # 重试/退避测试
-│   ├── test_port_group.cpp  # 分组协调测试
-│   ├── test_tcp_monitor.cpp # TCP 监控测试
-│   └── test_idle.cpp        # 空闲超时测试
+│   ├── doctest.h              # 单文件测试框架
+│   ├── test_main.cpp          # 测试入口
+│   ├── test_json.cpp          # JSON 解析测试
+│   ├── test_config.cpp        # 配置解析测试
+│   ├── test_relay.cpp         # 端口接力测试
+│   ├── test_retry.cpp         # 重试/退避测试
+│   ├── test_port_group.cpp    # 分组协调测试
+│   ├── test_tcp_monitor.cpp   # TCP 监控测试
+│   └── test_idle.cpp          # 空闲超时测试
 ├── scripts/
-│   ├── build-arm64.sh        # ARM64 交叉编译脚本
-│   ├── compile.sh            # 编译脚本
-│   ├── deploy-arm64.sh       # ARM64 部署脚本
-│   ├── install-service.sh    # systemd 服务安装脚本
-│   ├── update-local.sh       # 本地更新脚本
-│   └── gatekeeper.service    # systemd 服务模板
-├── CONFIG.md             # 配置说明文档（含所有模式详细配置）
-├── xmake.lua            # xmake 构建脚本（多平台/多架构）
-├── gatekeeper-config.json # 示例配置
-├── start-deeptutor.sh   # deeptutor 容器启动脚本
+│   ├── build-arm64.sh         # ARM64 交叉编译脚本
+│   ├── compile.sh             # 编译脚本
+│   ├── deploy-arm64.sh        # ARM64 部署脚本
+│   ├── install-service.sh     # systemd 服务安装脚本
+│   ├── update-local.sh        # 本地更新脚本
+│   └── gatekeeper.service     # systemd 服务模板
+├── CONFIG.md                  # 配置说明文档（含所有模式详细配置）
+├── xmake.lua                  # xmake 构建脚本（多平台/多架构）
+├── gatekeeper-config.json     # 示例配置
+├── start-deeptutor.sh         # deeptutor 容器启动脚本
 └── .github/workflows/build.yml  # GitHub Actions CI/CD
 ```
 
