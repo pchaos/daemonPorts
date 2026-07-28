@@ -257,7 +257,21 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten & rename artifacts for release
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            platform=$(basename "$dir")
+            find "$dir" -type f | while read f; do
+              fname=$(basename "$f")
+              mv "$f" "release/${platform}-${fname}"
+            done
+          done
+          echo "=== Release assets ==="
+          ls -lh release/
+
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          tag_name: ${{ github.ref_name }}
+          files: release/*
