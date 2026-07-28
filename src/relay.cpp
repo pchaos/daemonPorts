@@ -1011,9 +1011,9 @@ if (platform::isChildAlive(b.pid)) {
         }
         }
     }
-platform::joinThread(listenThread_);
-    platform::joinThread(monitorThread_);
-    platform::joinThread(proxyMonitorThread_);
+if (platform::threadValid(listenThread_)) platform::joinThread(listenThread_);
+    if (platform::threadValid(monitorThread_)) platform::joinThread(monitorThread_);
+    if (platform::threadValid(proxyMonitorThread_)) platform::joinThread(proxyMonitorThread_);
 }
 
 void PortRelay::signalStop() {
