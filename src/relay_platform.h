@@ -40,11 +40,20 @@ using PlatformHandle = intptr_t;
 // (same signed-size semantics as POSIX ssize_t)
 using ssize_t = intptr_t;
 
-// SOCK_CLOEXEC is a Linux extension; not available on Windows.
-// On Windows we use SetHandleInformation or just accept the inheritance.
+#endif
+
+// SOCK_CLOEXEC is a Linux extension; not available on macOS or Windows.
 #ifndef SOCK_CLOEXEC
 #define SOCK_CLOEXEC 0
 #endif
+
+// SHUT_WR/SHUT_RDWR are POSIX constants; not defined on Windows.
+// Windows SD_SEND=1 == SHUT_WR, SD_BOTH=2 == SHUT_RDWR (same values).
+#ifndef SHUT_WR
+#define SHUT_WR 1
+#endif
+#ifndef SHUT_RDWR
+#define SHUT_RDWR 2
 #endif
 
 // ── Portable socket interface ─────────────────────────────────────────
