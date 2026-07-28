@@ -8,6 +8,11 @@
 #include <unistd.h>
 #include <errno.h>
 
+// SOCK_CLOEXEC — macOS 10.6 及更早版本未定义
+#ifndef SOCK_CLOEXEC
+#define SOCK_CLOEXEC 0
+#endif
+
 static inline int sd_notify(int unset_environment, const char *state) {
     const char *sock_path;
     struct sockaddr_un addr;
