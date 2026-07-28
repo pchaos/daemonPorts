@@ -18,13 +18,13 @@
 #define NOMINMAX
 #include <winsock2.h>
 #include <windows.h>
-// Windows 缺少 TCP 状态常量定义
+#endif
+// TCP 状态常量 — macOS 的 <netinet/tcp.h> 不包含 tcp_fsm.h
 #ifndef TCP_LISTEN
 #define TCP_LISTEN 0x0A
 #endif
 #ifndef TCP_ESTABLISHED
 #define TCP_ESTABLISHED 0x01
-#endif
 #endif
 
 static std::vector<std::unique_ptr<PortGroup>> g_groups;

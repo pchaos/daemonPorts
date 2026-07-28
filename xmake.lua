@@ -37,7 +37,7 @@ target("gatekeeper")
     end
 
     -- ── Windows (MinGW / MSVC) ──────────────────────────────
-    if is_plat("windows") then
+    if is_plat("windows", "mingw") then
         add_syslinks("ws2_32")
     end
 
@@ -89,7 +89,7 @@ target("gatekeeper-systemd")
     end
 
     -- ── Windows (MinGW / MSVC) ──────────────────────────────
-    if is_plat("windows") then
+    if is_plat("windows", "mingw") then
         add_syslinks("ws2_32")
     end
 
