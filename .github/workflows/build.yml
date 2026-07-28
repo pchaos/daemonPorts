@@ -159,9 +159,16 @@ jobs:
       - name: Install xmake
         shell: pwsh
         run: |
-          irm https://xmake.io/psget.text | iex
-          "XMAKE_DIR=$env:USERPROFILE\AppData\Local\.xmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "$env:USERPROFILE\AppData\Local\.xmake" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # Download xmake installer
+          $tmp = "$env:TEMP\xmake-installer.exe"
+          Invoke-Webrequest "https://github.com/xmake-io/xmake/releases/download/v3.0.9/xmake-v3.0.9.win64.exe" -OutFile $tmp -UseBasicParsing
+          # Install silently
+          $installDir = "$env:USERPROFILE\.xmake"
+          Start-Process -FilePath $tmp -ArgumentList "/S /D=$installDir" -Wait
+          Remove-Item $tmp -ErrorAction SilentlyContinue
+          # Add to PATH
+          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "XMAKE_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Configure & Build (release)
         shell: pwsh
