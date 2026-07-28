@@ -10,7 +10,9 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>   // memcpy
+#ifndef _WIN32
 #include <netinet/in.h>  // in6_addr, ntohs, sockaddr_in
+#endif
 
 // ── 一条 TCP 连接信息 ──
 struct TcpConnEntry {

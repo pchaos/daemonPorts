@@ -1,7 +1,9 @@
 // -*- mode: c++; -*-
 #include "port_group.h"
 #include <iostream>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 PortGroup::PortGroup(const std::string &name) : name_(name) {}
 

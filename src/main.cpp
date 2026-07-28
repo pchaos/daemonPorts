@@ -6,13 +6,18 @@
 
 #include <iostream>
 #include <memory>
-#include <netinet/tcp.h>
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <sstream>
+#ifndef _WIN32
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <unistd.h>
-#include <sstream>
+#else
+#include <winsock2.h>
+#include <windows.h>
+#endif
 
 static std::vector<std::unique_ptr<PortGroup>> g_groups;
 
@@ -204,9 +209,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT,  handleSignal);
     signal(SIGTERM, handleSignal);
+#else
+    // Windows: no SIGPIPE, use SetConsoleCtrlHandler for Ctrl+C
+    SetConsoleCtrlHandler([](DWORD) -> BOOL {
+        g_stop.store(true);
+        for (auto& g : g_groups) {
+            if (g) g->signalStop();
+        }
+        for (auto& r : g_relays) r->signalStop();
+        return TRUE;
+    }, TRUE);
+#endif
 
     std::cout << "门卫程序启动，管理 " << cfgs.size() << " 个端口:" << std::endl;
     bool anyMonitor = false;
@@ -263,7 +280,14 @@ int main(int argc, char* argv[]) {
         std::cout << "systemd: READY=1" << std::endl;
     }
 
+    #ifndef _WIN32
     pause();
+#else
+    // Windows: WaitForSingleObject on an event handle, or just sleep
+    while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+#endif
 
     std::cout << "门卫程序退出" << std::endl;
     // Stop all groups before exiting (groups stop their relays)
