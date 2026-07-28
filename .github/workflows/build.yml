@@ -134,6 +134,7 @@ jobs:
 
       - name: Configure & Build (release, MinGW)
         run: |
+          xmake g --mingw=/usr
           xmake f -p mingw -a ${{ matrix.arch }} -m release -y
           xmake
 
@@ -156,15 +157,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install xmake
-        uses: xmake-io/github-action-setup-xmake@v1
-        with:
-          xmake-version: latest
+        shell: pwsh
+        run: |
+          irm https://xmake.io/psget.text | iex
+          "XMAKE_DIR=$env:USERPROFILE\AppData\Local\.xmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$env:USERPROFILE\AppData\Local\.xmake" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure & Build (release)
+        shell: pwsh
         run: |
           xmake f -p windows -a ${{ matrix.arch }} -m release -y
           xmake
-        shell: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -189,9 +192,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install xmake
-        uses: xmake-io/github-action-setup-xmake@v1
-        with:
-          xmake-version: latest
+        run: |
+          curl -fsSL https://xmake.io/shget.text | bash
+          echo "XMAKE_DIR=$HOME/.xmake" >> $GITHUB_ENV
+          echo "$HOME/.xmake/bin" >> $GITHUB_PATH
 
       - name: Configure & Build (release)
         run: |
