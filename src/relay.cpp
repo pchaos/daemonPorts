@@ -24,6 +24,7 @@
 #include <netdb.h>
 #include <dirent.h>
 #else
+#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -35,8 +36,13 @@
 #define usleep(us) Sleep((us)/1000)
 #define popen _popen
 #define pclose _pclose
-#define read(fd, buf, n) recv(fd, buf, n, 0)
-#define write(fd, buf, n) send(fd, buf, n, 0)
+#define read(fd, buf, n) recv(fd, (char*)(buf), (int)(n), 0)
+#define write(fd, buf, n) send(fd, (const char*)(buf), (int)(n), 0)
+#define setsockopt(fd, lvl, opt, val, len) setsockopt(fd, lvl, opt, (const char*)(val), (int)(len))
+// ssize_t 在 MSVC 中未定义
+#ifndef ssize_t
+#define ssize_t int
+#endif
 // SOCK_CLOEXEC 在 Windows 上不存在
 #ifndef SOCK_CLOEXEC
 #define SOCK_CLOEXEC 0
@@ -240,10 +246,12 @@ void PortRelay::logBindFailed() {
         msg += "端口被占用";
         int port = monitorPort();
         if (port > 0) {
+#ifdef __linux__
             std::string occupant = findProcessUsingPort(static_cast<uint16_t>(port));
             if (!occupant.empty()) {
                 msg += " by " + occupant;
             }
+#endif
         }
     } else {
         msg += strerror(errno);

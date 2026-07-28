@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <unistd.h>
 #else
+#define NOMINMAX
 #include <winsock2.h>
 #include <windows.h>
 // Windows 缺少 TCP 状态常量定义

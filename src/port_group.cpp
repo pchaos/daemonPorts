@@ -4,6 +4,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #else
+#define NOMINMAX
 #include <winsock2.h>
 #include <io.h>
 #define close(fd) closesocket(fd)
