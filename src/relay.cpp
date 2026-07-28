@@ -4,28 +4,14 @@
 #include <iostream>
 #include <cstring>
 #include <ctime>
-#include <errno.h>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <thread>
 #include <chrono>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <signal.h>
 
-
-
-
-// SOCK_CLOEXEC — macOS 10.6 及更早版本未定义
-#ifndef SOCK_CLOEXEC
-#define SOCK_CLOEXEC 0
-#endif
+// SOCK_CLOEXEC — defined in relay_platform.h (if not available, #define SOCK_CLOEXEC 0)
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
 // 检测端口是否被占用，返回占用进程的 PID（找不到返回 0）
@@ -34,24 +20,24 @@
 
 
 bool PortRelay::isPortBound(uint16_t port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    PlatformHandle fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return true;
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    sockaddr_in sa{};
+    platform::set_sockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in sa{};
     sa.sin_family = AF_INET;
     sa.sin_addr.s_addr = htonl(INADDR_ANY);
     sa.sin_port = htons(port);
-    int rc = bind(fd, (struct sockaddr*)&sa, sizeof(sa));
-    close(fd);
-    return (rc < 0 && errno == EADDRINUSE);
+    int rc = platform::bind_fd(fd, &sa, sizeof(sa));
+    platform::close_fd(fd);
+    return (rc < 0 && platform::last_error_is(PLATFORM_EADDRINUSE));
 }
 
 void PortRelay::logBindFailed() {
     std::string msg = "  [" + name_ + "] 绑定 " + listenAddr_ + " 失败（";
-    if (errno == EACCES) {
+    if (platform::last_error_is(PLATFORM_EACCES)) {
         msg += "权限不足，需要 CAP_NET_BIND_SERVICE";
-    } else if (errno == EADDRINUSE) {
+    } else if (platform::last_error_is(PLATFORM_EADDRINUSE)) {
         msg += "端口被占用";
         int port = monitorPort();
         if (port > 0) {
@@ -61,7 +47,7 @@ void PortRelay::logBindFailed() {
     }
         }
     } else {
-        msg += strerror(errno);
+        msg += platform::last_error_str();
     }
     msg += "），" + std::to_string(retrySeconds_) + " 秒后重试（最大 "
            + std::to_string(retrySecondsMax_) + " 秒）";
@@ -80,7 +66,7 @@ static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     out.sin_port = htons(port);
     if (host.empty() || host == "0.0.0.0") out.sin_addr.s_addr = INADDR_ANY;
     else if (host == "localhost" || host == "127.0.0.1") out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    else inet_pton(AF_INET, host.c_str(), &out.sin_addr);
+    else platform::inet_pton_wrap(AF_INET, host.c_str(), &out.sin_addr);
     return true;
 }
 
@@ -111,14 +97,14 @@ int PortRelay::createListener() {
         std::cerr << "  [" << name_ << "] 无效地址: " << listenAddr_ << std::endl;
         return -1;
     }
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) { perror("socket"); return -1; }
+    int fd = platform::socket_ai(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) { std::cerr << "socket: " << platform::last_error_str() << std::endl; return -1; }
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-            close(fd); return -1;
+    platform::set_sockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        if (platform::bind_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            platform::close_fd(fd); return -1;
         }
-    if (listen(fd, 128) < 0) { perror("listen"); close(fd); return -1; }
+    if (platform::listen_fd(fd, 128) < 0) { std::cerr << "listen: " << platform::last_error_str() << std::endl; platform::close_fd(fd); return -1; }
     return fd;
 }
 
@@ -131,19 +117,19 @@ bool PortRelay::waitForBackend(int ms) {
     if (!parseSockaddr(listenAddr_, sa)) return false;
     auto start = std::chrono::steady_clock::now();
     while (true) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
         if (fd >= 0) {
-            if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) { close(fd); return true; }
-            close(fd);
+            if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) { platform::close_fd(fd); return true; }
+            platform::close_fd(fd);
         }
         if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(ms)) return false;
-        usleep(50000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
 void PortRelay::sendStartupPage(int fd) {
     std::string response = buildStartupResponse();
-    write(fd, response.data(), response.size());
+    platform::write_fd(fd, response.data(), response.size());
 }
 
 std::string PortRelay::buildStartupResponse() const {
@@ -214,15 +200,15 @@ void PortRelay::listenLoop() {
 
         while (!stop_.load()) {
             sockaddr_in cli;
-            socklen_t len = sizeof(cli);
-            int fd = accept(listenFd_.load(), (struct sockaddr*)&cli, &len);
+            int len = sizeof(cli);
+            int fd = platform::accept_fd(listenFd_.load(), (struct sockaddr*)&cli, &len);
             if (fd < 0) {
-                if (stop_.load() || errno == EINVAL) break;
+                if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
                 continue;
             }
 
             sendStartupPage(fd);
-            close(fd);
+            platform::close_fd(fd);
 
             // Group coordination: notify group and let it handle backend launch
             if (group_) {
@@ -238,7 +224,7 @@ void PortRelay::listenLoop() {
                 std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
 
                 int lfd = listenFd_.exchange(-1);
-                if (lfd >= 0) ::close(lfd);
+                if (lfd >= 0) platform::close_fd(lfd);
                 std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                 if (!waitForBackend(delayMs_))
@@ -252,7 +238,7 @@ void PortRelay::listenLoop() {
 
         int fd = listenFd_.exchange(-1);
         if (fd >= 0) {
-            ::close(fd);
+            platform::close_fd(fd);
         }
 
         if (!autoRestart_ || stop_.load()) break;
@@ -369,7 +355,7 @@ void PortRelay::monitorBackend() {
 
 std::string PortRelay::detectProtocol(int fd) {
     unsigned char buf[8];
-    ssize_t n = recv(fd, buf, sizeof(buf), MSG_PEEK);
+    ssize_t n = platform::recv_peek_fd(fd, buf, sizeof(buf));
     if (n <= 0) return "unknown";
 
     // SOCKS5: 首字节固定 0x05（协议版本号）
@@ -405,11 +391,11 @@ void PortRelay::sendMixedResponse(int fd, const std::string& proto) {
     } else if (proto == "socks5") {
         // SOCKS5 方法选择响应：版本 5，不允许任何认证方式
         unsigned char resp[] = {0x05, 0xff};
-        write(fd, resp, sizeof(resp));
+        platform::write_fd(fd, resp, sizeof(resp));
     } else if (proto == "socks4") {
         // SOCKS4 响应：VN=0, CD=0x5B(请求被拒), DSTPORT=0, DSTIP=0
         unsigned char resp[] = {0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-        write(fd, resp, sizeof(resp));
+        platform::write_fd(fd, resp, sizeof(resp));
     }
 }
 
@@ -420,26 +406,26 @@ void PortRelay::sendMixedResponse(int fd, const std::string& proto) {
 static void pipeRelay(int src, int dst, std::atomic<bool>& done) {
     char buf[16384];
     ssize_t n;
-    while ((n = read(src, buf, sizeof(buf))) > 0) {
+    while ((n = platform::read_fd(src, buf, sizeof(buf))) > 0) {
         size_t off = 0;
         while (off < (size_t)n) {
-            ssize_t w = write(dst, buf + off, n - off);
+            ssize_t w = platform::write_fd(dst, buf + off, n - off);
             if (w <= 0) { done.store(true); return; }
             off += w;
         }
     }
     // 源端关闭后，通知对端停止写
-    shutdown(dst, SHUT_WR);
+    platform::shutdown_fd(dst, SHUT_WR);
     done.store(true);
 }
 
 int PortRelay::connectToBackend(const std::string& addr) {
     sockaddr_in sa;
     if (!parseSockaddr(addr, sa)) return -1;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
-    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-        close(fd);
+    if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+        platform::close_fd(fd);
         return -1;
     }
     return fd;
@@ -448,7 +434,7 @@ int PortRelay::connectToBackend(const std::string& addr) {
 void PortRelay::proxyConnection(int clientFd, const std::string& proxyTo) {
     int backendFd = connectToBackend(proxyTo);
     if (backendFd < 0) {
-        close(clientFd);
+        platform::close_fd(clientFd);
         return;
     }
 
@@ -461,16 +447,16 @@ void PortRelay::proxyConnection(int clientFd, const std::string& proxyTo) {
 
     // 等待任一方向结束
     while (!done1 && !done2) {
-        usleep(50000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     // 强制关闭两端，回收线程
-    shutdown(clientFd, SHUT_RDWR);
-    shutdown(backendFd, SHUT_RDWR);
+    platform::shutdown_fd(clientFd, SHUT_RDWR);
+    platform::shutdown_fd(backendFd, SHUT_RDWR);
     if (t1.joinable()) t1.join();
     if (t2.joinable()) t2.join();
-    close(clientFd);
-    close(backendFd);
+    platform::close_fd(clientFd);
+    platform::close_fd(backendFd);
 
     std::cout << "  [" << name_ << "] 隧道已关闭" << std::endl;
 }
@@ -496,18 +482,18 @@ void PortRelay::launchProtocolBackend(BackendState& bs) {
     if (parseSockaddr(bs.proxyTo, sa)) {
         auto start = std::chrono::steady_clock::now();
         while (true) {
-            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
             if (fd >= 0) {
-                if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
-                    close(fd);
+                if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    platform::close_fd(fd);
                     bs.ready->store(true);
                     break;
                 }
-                close(fd);
+                platform::close_fd(fd);
             }
             if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(bs.delayMs))
                 break;
-            usleep(50000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 
@@ -558,7 +544,7 @@ void PortRelay::proxyMonitorLoop() {
 static int recv_exact(int fd, unsigned char* buf, int n) {
     int total = 0;
     while (total < n) {
-        ssize_t r = read(fd, buf + total, n - total);
+        ssize_t r = platform::read_fd(fd, buf + total, n - total);
         if (r <= 0) return total > 0 ? total : -1;
         total += r;
     }
@@ -597,10 +583,10 @@ void PortRelay::socks5ListenLoop() {
 
         while (!stop_.load()) {
             sockaddr_in cli;
-            socklen_t len = sizeof(cli);
-            int fd = accept(listenFd_, (struct sockaddr*)&cli, &len);
+            int len = sizeof(cli);
+            int fd = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
             if (fd < 0) {
-                if (stop_.load() || errno == EINVAL) break;
+                if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
                 continue;
             }
 
@@ -611,10 +597,10 @@ void PortRelay::socks5ListenLoop() {
                 // ── SOCKS5 认证协商 ──
                 unsigned char buf[256];
                 // 读版本 + 方法数 + 方法列表
-                if (recv_exact(fd, buf, 2) != 2) { close(fd); continue; }
+                if (recv_exact(fd, buf, 2) != 2) { platform::close_fd(fd); continue; }
                 int nmethods = buf[1];
                 if (nmethods < 1 || nmethods > 255 ||
-                    recv_exact(fd, buf, nmethods) != nmethods) { close(fd); continue; }
+                    recv_exact(fd, buf, nmethods) != nmethods) { platform::close_fd(fd); continue; }
 
                 bool hasNoAuth = false, hasUserPass = false;
                 for (int i = 0; i < nmethods; i++) {
@@ -631,39 +617,39 @@ void PortRelay::socks5ListenLoop() {
                     method = 0x00;
                 }
                 unsigned char authResp[] = {0x05, method};
-                write(fd, authResp, sizeof(authResp));
+                platform::write_fd(fd, authResp, sizeof(authResp));
 
-                if (method == 0xff) { close(fd); continue; }
+                if (method == 0xff) { platform::close_fd(fd); continue; }
 
                 // ── USER/PASS 认证子协商 ──
                 if (useUserPass) {
-                    if (recv_exact(fd, buf, 2) != 2) { close(fd); continue; }
+                    if (recv_exact(fd, buf, 2) != 2) { platform::close_fd(fd); continue; }
                     int ulen = buf[1];
                     if (ulen < 1 || ulen > 255 ||
-                        recv_exact(fd, buf, ulen) != ulen) { close(fd); continue; }
+                        recv_exact(fd, buf, ulen) != ulen) { platform::close_fd(fd); continue; }
                     std::string uname((const char*)buf, ulen);
-                    if (recv_exact(fd, buf, 1) != 1) { close(fd); continue; }
+                    if (recv_exact(fd, buf, 1) != 1) { platform::close_fd(fd); continue; }
                     int plen = buf[0];
                     if (plen < 1 || plen > 255 ||
-                        recv_exact(fd, buf, plen) != plen) { close(fd); continue; }
+                        recv_exact(fd, buf, plen) != plen) { platform::close_fd(fd); continue; }
                     std::string passwd((const char*)buf, plen);
 
                     bool ok = (uname == auth_.username && passwd == auth_.password);
                     int r = ok ? 0 : 1;
                     unsigned char upResp[] = {0x01, (unsigned char)r};
-                    write(fd, upResp, sizeof(upResp));
-                    if (!ok) { close(fd); continue; }
+                    platform::write_fd(fd, upResp, sizeof(upResp));
+                    if (!ok) { platform::close_fd(fd); continue; }
                 }
 
                 // ── SOCKS5 请求解析 ──
                 // 格式: ver(1) + cmd(1) + rsv(1) + atyp(1) + dst.addr(可变) + dst.port(2)
                 unsigned char hdr[4];
-                if (recv_exact(fd, hdr, 4) != 4) { close(fd); continue; }
+                if (recv_exact(fd, hdr, 4) != 4) { platform::close_fd(fd); continue; }
                 unsigned char cmd = hdr[1];
                 unsigned char atyp = hdr[3];
 
                 // 只支持 CONNECT (0x01)
-                if (cmd != 0x01) { close(fd); continue; }
+                if (cmd != 0x01) { platform::close_fd(fd); continue; }
 
                 // 解析目标地址
                 std::string targetAddr;
@@ -673,7 +659,7 @@ void PortRelay::socks5ListenLoop() {
                 if (atyp == 0x01) {
                     // IPv4: 4 字节
                     unsigned char addr[4];
-                    if (recv_exact(fd, addr, 4) != 4) { close(fd); continue; }
+                    if (recv_exact(fd, addr, 4) != 4) { platform::close_fd(fd); continue; }
                     char ip[32];
                     snprintf(ip, sizeof(ip), "%d.%d.%d.%d", addr[0], addr[1], addr[2], addr[3]);
                     targetAddr = ip;
@@ -681,22 +667,22 @@ void PortRelay::socks5ListenLoop() {
                 } else if (atyp == 0x03) {
                     // 域名: 1 字节长度 + N 字节域名
                     unsigned char dlen;
-                    if (recv_exact(fd, &dlen, 1) != 1) { close(fd); continue; }
-                    if (dlen < 1) { close(fd); continue; }
+                    if (recv_exact(fd, &dlen, 1) != 1) { platform::close_fd(fd); continue; }
+                    if (dlen < 1) { platform::close_fd(fd); continue; }
                     unsigned char domain[256];
-                    if (recv_exact(fd, domain, dlen) != (int)dlen) { close(fd); continue; }
+                    if (recv_exact(fd, domain, dlen) != (int)dlen) { platform::close_fd(fd); continue; }
                     targetAddr = std::string((const char*)domain, dlen);
                     addrOk = true;
                 } else if (atyp == 0x04) {
-                    close(fd);
+                    platform::close_fd(fd);
                     continue;
                 }
 
                 // 读端口 (2 字节, 网络字节序)
                 unsigned char portBytes[2];
-                if (recv_exact(fd, portBytes, 2) != 2) { close(fd); continue; }
+                if (recv_exact(fd, portBytes, 2) != 2) { platform::close_fd(fd); continue; }
                 targetPort = (portBytes[0] << 8) | portBytes[1];
-                if (!addrOk || targetPort <= 0) { close(fd); continue; }
+                if (!addrOk || targetPort <= 0) { platform::close_fd(fd); continue; }
 
                 std::string targetStr = targetAddr + ":" + std::to_string(targetPort);
                 std::cout << "  [" << name_ << "] SOCKS5 CONNECT " << targetStr << std::endl;
@@ -711,29 +697,29 @@ void PortRelay::socks5ListenLoop() {
                 snprintf(portStr, sizeof(portStr), "%d", targetPort);
 
                 int targetFd = -1;
-                if (getaddrinfo(targetAddr.c_str(), portStr, &hints, &res) == 0) {
+                if (platform::getaddrinfo_wrap(targetAddr.c_str(), portStr, &hints, &res) == 0) {
                     for (struct addrinfo* rp = res; rp; rp = rp->ai_next) {
                         targetFd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
                         if (targetFd < 0) continue;
-                        if (connect(targetFd, rp->ai_addr, rp->ai_addrlen) == 0) break;
-                        close(targetFd);
+                        if (platform::connect_fd(targetFd, rp->ai_addr, static_cast<int>(rp->ai_addrlen)) == 0) break;
+                        platform::close_fd(targetFd);
                         targetFd = -1;
                     }
-                    freeaddrinfo(res);
+                    platform::freeaddrinfo_wrap(res);
                 }
 
                 if (targetFd < 0) {
                     // 连接失败 → SOCKS5 响应: 一般失败
                     unsigned char resp[] = {0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0};
-                    write(fd, resp, sizeof(resp));
-                    close(fd);
+                    platform::write_fd(fd, resp, sizeof(resp));
+                    platform::close_fd(fd);
                     std::cout << "  [" << name_ << "] SOCKS5 连接失败: " << targetStr << std::endl;
                     continue;
                 }
 
                 // ── SOCKS5 响应: 成功 ──
                 unsigned char resp[] = {0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0};
-                write(fd, resp, sizeof(resp));
+                platform::write_fd(fd, resp, sizeof(resp));
                 std::cout << "  [" << name_ << "] SOCKS5 隧道建立: 客户端 ↔ " << targetStr << std::endl;
 
                 // ── 双向隧道 ──
@@ -741,26 +727,26 @@ void PortRelay::socks5ListenLoop() {
                 std::thread t1(pipeRelay, fd, targetFd, std::ref(done1));
                 std::thread t2(pipeRelay, targetFd, fd, std::ref(done2));
 
-                while (!done1 && !done2) usleep(50000);
+                while (!done1 && !done2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-                shutdown(fd, SHUT_RDWR);
-                shutdown(targetFd, SHUT_RDWR);
+                platform::shutdown_fd(fd, SHUT_RDWR);
+                platform::shutdown_fd(targetFd, SHUT_RDWR);
                 if (t1.joinable()) t1.join();
                 if (t2.joinable()) t2.join();
-                close(fd);
-                close(targetFd);
+                platform::close_fd(fd);
+                platform::close_fd(targetFd);
                 std::cout << "  [" << name_ << "] SOCKS5 隧道关闭: " << targetStr << std::endl;
 
             } else if (proto == "http" && !httpTarget_.empty()) {
                 // HTTP → 转发到 httpTarget_
                 proxyConnection(fd, httpTarget_);
             } else {
-                close(fd);
+                platform::close_fd(fd);
             }
         }
 
         if (listenFd_ >= 0) {
-            close(listenFd_);
+            platform::close_fd(listenFd_);
             listenFd_ = -1;
         }
         if (!autoRestart_ || stop_.load()) break;
@@ -858,17 +844,17 @@ void PortRelay::mixedListenLoop() {
 
         while (!stop_.load()) {
             sockaddr_in cli;
-            socklen_t len = sizeof(cli);
-            int fd = accept(listenFd_, (struct sockaddr*)&cli, &len);
+            int len = sizeof(cli);
+            int fd = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
             if (fd < 0) {
-                if (stop_.load() || errno == EINVAL) break;
+                if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
                 continue;
             }
 
             // 读前几个字节识别协议（不消费数据），MSG_PEEK 保证数据还在缓冲区
             std::string proto = detectProtocol(fd);
             if (proto == "unknown") {
-                close(fd);
+                platform::close_fd(fd);
                 continue;
             }
             std::cout << "  [" << name_ << "] 检测到 " << proto << " 连接" << std::endl;
@@ -879,7 +865,7 @@ void PortRelay::mixedListenLoop() {
                 if (!bs) {
                     std::cout << "  [" << name_ << "] " << proto
                               << " 协议未配置，关闭连接" << std::endl;
-                    close(fd);
+                    platform::close_fd(fd);
                     continue;
                 }
 
@@ -896,13 +882,13 @@ void PortRelay::mixedListenLoop() {
                     std::cout << "  [" << name_ << "] " << proto
                               << " 后端未就绪，发送引导响应" << std::endl;
                     sendMixedResponse(fd, proto);
-                    close(fd);
+                    platform::close_fd(fd);
                 }
                 // 不释放端口，继续 accept
             } else {
                 // ── hold_port=false：引导后释放模式 ──
                 sendMixedResponse(fd, proto);
-                close(fd);
+                platform::close_fd(fd);
 
                 // 第一个连接触发后端启动
                 if (backendPid_ == 0) {
@@ -913,7 +899,7 @@ void PortRelay::mixedListenLoop() {
                               << std::endl;
 
                     int lfd = listenFd_.exchange(-1);
-                    if (lfd >= 0) ::close(lfd);
+                    if (lfd >= 0) platform::close_fd(lfd);
                     std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
 
                     if (!waitForBackend(delayMs_))
@@ -927,7 +913,7 @@ void PortRelay::mixedListenLoop() {
         }
 
         if (listenFd_ >= 0) {
-            close(listenFd_);
+            platform::close_fd(listenFd_);
             listenFd_ = -1;
         }
 
@@ -1009,7 +995,7 @@ void PortRelay::stop() {
     // Close listening socket if open
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
-        ::close(fd);
+        platform::close_fd(fd);
     }
     // Clean up simple / mixed+hold_port=false backend
     if (backendPid_ > 0) {
@@ -1034,7 +1020,7 @@ void PortRelay::signalStop() {
     stop_.store(true);
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
-        ::close(fd);
+        platform::close_fd(fd);
     }
 }
 
@@ -1071,7 +1057,7 @@ void PortRelay::forceReleasePort() {
     groupReleased_.store(true);
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
-        ::close(fd);
+        platform::close_fd(fd);
     }
 }
 

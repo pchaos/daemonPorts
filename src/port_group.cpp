@@ -1,14 +1,7 @@
 // -*- mode: c++; -*-
 #include "port_group.h"
+#include "relay_platform.h"
 #include <iostream>
-#ifndef _WIN32
-#include <unistd.h>
-#else
-#define NOMINMAX
-#include <winsock2.h>
-#include <io.h>
-#define close(fd) closesocket(fd)
-#endif
 
 PortGroup::PortGroup(const std::string &name) : name_(name) {}
 
@@ -43,7 +36,7 @@ void PortGroup::onConnection(PortRelay * /*source*/) {
     // Close listening socket so that the port is released to the backend
     int fd = r->listenFd_.exchange(-1);
     if (fd >= 0) {
-      close(fd);
+      platform::close_fd(fd);
     }
   }
 }

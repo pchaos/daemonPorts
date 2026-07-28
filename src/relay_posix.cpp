@@ -1,10 +1,83 @@
 #include "relay_platform.h"
-#include <unistd.h>
+#include <cstring>
 #include <sys/wait.h>
-#include <signal.h>
-#include <cerrno>
 
 namespace platform {
+
+// ── Socket lifecycle ─────────────────────────────────────────────────
+
+PlatformHandle socket_ai(int family, int type, int protocol) {
+    return ::socket(family, type, protocol);
+}
+int bind_fd(PlatformHandle fd, const void* addr, int len) {
+    return ::bind(fd, static_cast<const struct sockaddr*>(addr), len);
+}
+int listen_fd(PlatformHandle fd, int backlog) {
+    return ::listen(fd, backlog);
+}
+PlatformHandle accept_fd(PlatformHandle fd, void* addr, int* len) {
+    return ::accept(fd, static_cast<struct sockaddr*>(addr),
+                    len ? reinterpret_cast<socklen_t*>(len) : nullptr);
+}
+int connect_fd(PlatformHandle fd, const void* addr, int len) {
+    return ::connect(fd, static_cast<const struct sockaddr*>(addr), len);
+}
+int close_fd(PlatformHandle fd) { return ::close(fd); }
+
+// ── I/O ───────────────────────────────────────────────────────────────
+
+ssize_t read_fd(PlatformHandle fd, void* buf, size_t len) {
+    return ::read(fd, buf, len);
+}
+ssize_t write_fd(PlatformHandle fd, const void* buf, size_t len) {
+    return ::write(fd, buf, len);
+}
+int shutdown_fd(PlatformHandle fd, int how) {
+    return ::shutdown(fd, how);
+}
+ssize_t recv_peek_fd(PlatformHandle fd, void* buf, size_t len) {
+    return ::recv(fd, buf, len, MSG_PEEK);
+}
+
+// ── Socket options ────────────────────────────────────────────────────
+
+int set_sockopt(PlatformHandle fd, int level, int optname,
+                const void* optval, int optlen) {
+    return ::setsockopt(fd, level, optname, optval,
+                        static_cast<socklen_t>(optlen));
+}
+
+// ── Address resolution ────────────────────────────────────────────────
+
+int getaddrinfo_wrap(const char* node, const char* service,
+                     const struct addrinfo* hints, struct addrinfo** res) {
+    return ::getaddrinfo(node, service, hints, res);
+}
+void freeaddrinfo_wrap(struct addrinfo* res) {
+    ::freeaddrinfo(res);
+}
+
+// ── Address conversion ────────────────────────────────────────────────
+
+int inet_pton_wrap(int af, const char* src, void* dst) {
+    return ::inet_pton(af, src, dst);
+}
+
+// ── Error handling ────────────────────────────────────────────────────
+
+int last_error() { return errno; }
+bool last_error_is(int code) { return errno == code; }
+std::string last_error_str() {
+    char buf[256];
+#ifdef _GNU_SOURCE
+    return strerror_r(errno, buf, sizeof(buf)) ? "unknown error" : buf;
+#else
+    // XSI-compliant strerror_r returns int
+    return strerror_r(errno, buf, sizeof(buf)) == 0 ? buf : "unknown error";
+#endif
+}
+
+// ── Process / thread ────────────────────────────────────────────────
 
 pid_t launchProcess(const std::string& command) {
     pid_t pid = fork();
@@ -16,21 +89,21 @@ pid_t launchProcess(const std::string& command) {
     return pid;
 }
 
-void killProcess(pid_t pid) { kill(pid, SIGTERM); }
-void termProcess(pid_t pid) { kill(pid, SIGKILL); }
+void killProcess(pid_t pid) { ::kill(pid, SIGKILL); }
+void termProcess(pid_t pid) { ::kill(pid, SIGTERM); }
 
 bool isChildAlive(pid_t pid) {
     int status;
-    return waitpid(pid, &status, WNOHANG) == 0;
+    return ::waitpid(pid, &status, WNOHANG) == 0;
 }
 
 pid_t waitChild(pid_t pid) {
     int status;
-    return waitpid(pid, &status, 0);
+    return ::waitpid(pid, &status, 0);
 }
 
 bool isProcessRunning(pid_t pid) {
-    return kill(pid, 0) == 0;
+    return ::kill(pid, 0) == 0;
 }
 
 void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int stackSizeKB) {
