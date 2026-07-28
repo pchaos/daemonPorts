@@ -79,7 +79,9 @@ target("gatekeeper-systemd")
     add_includedirs("src")
 
     -- ── 始终启用 systemd（嵌入式 sd-daemon.h，无需链接 libsystemd）──
-    add_defines("HAVE_SYSTEMD")
+    if not is_plat("windows") then
+        add_defines("HAVE_SYSTEMD")
+    end
 
     -- ── POSIX 平台 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
