@@ -49,10 +49,11 @@
 #define recv(s, buf, len, flags) ::recv(s, (char*)(buf), (int)(len), flags)
 #define send(s, buf, len, flags) ::send(s, (const char*)(buf), (int)(len), flags)
 #endif
-// SOCK_CLOEXEC 在 Windows 和旧版 macOS 上不存在
+#endif
+
+// SOCK_CLOEXEC — macOS 10.6 及更早版本未定义
 #ifndef SOCK_CLOEXEC
 #define SOCK_CLOEXEC 0
-#endif
 #endif
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
