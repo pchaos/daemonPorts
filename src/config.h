@@ -61,4 +61,17 @@ std::vector<PortConfig> parseConfig(const std::string& json);
 // 从文件加载并解析配置
 std::vector<PortConfig> loadConfig(const std::string& path);
 
+// Control configuration structs
+struct ControlAuth {
+    std::string type = "none"; // "none" | "token"
+    std::string token;
+};
+
+struct ControlConfig {
+    std::string listen; // e.g. ":19999", empty = disabled
+    ControlAuth auth;
+};
+
+extern ControlConfig g_controlConfig;
+
 #endif // GATEKEEPER_CONFIG_H

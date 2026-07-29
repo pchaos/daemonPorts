@@ -4,6 +4,7 @@
 #include "port_group.h"
 #include <map>
 
+
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -209,19 +210,33 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (argc < 2) {
+    // Determine config path and parse CLI control port option
+    std::string configPath;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--control-port") == 0) {
+            if (i + 1 < argc) {
+                g_controlConfig.listen = argv[++i];
+            }
+            continue;
+        }
+        // treat "-" as stdin indicator, otherwise first non-flag argument is config path
+        if (argv[i][0] != '-') {
+            configPath = argv[i];
+        }
+    }
+    if (configPath.empty()) {
         printHelp();
         return 1;
     }
 
     // "-" 表示从 stdin 读取配置
     std::vector<PortConfig> cfgs;
-    if (std::string(argv[1]) == "-") {
+    if (configPath == "-") {
         std::stringstream ss;
         ss << std::cin.rdbuf();
         cfgs = parseConfig(ss.str());
     } else {
-        cfgs = loadConfig(argv[1]);
+        cfgs = loadConfig(configPath);
     }
     if (cfgs.empty()) {
         std::cerr << "错误: 没有有效的端口配置" << std::endl;
@@ -238,6 +253,9 @@ int main(int argc, char* argv[]) {
 #endif
 
     std::cout << "门卫程序启动，管理 " << cfgs.size() << " 个端口:" << std::endl;
+    if (!g_controlConfig.listen.empty()) {
+        std::cout << "Control 监听端口: " << g_controlConfig.listen << std::endl;
+    }
     bool anyMonitor = false;
     struct RelayInfo { PortRelay* relay; const PortConfig* cfg; };
     std::map<std::string, std::vector<RelayInfo>> groupMap; 

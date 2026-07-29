@@ -25,7 +25,7 @@ target("gatekeeper")
     else
         add_files("src/relay_posix.cpp")
         add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
-        if is_plat("linux") then
+        if is_plat("linux", "cross") then
             add_files("src/relay_linux.cpp")
         end
     end
@@ -53,6 +53,12 @@ target("gatekeeper")
     -- ── 编译器标志 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
         add_cxxflags("-Wall", "-Wextra", "-Wpedantic")
+    end
+
+    -- ── 交叉编译：裁剪未引用的静态库死代码（交叉工具链无共享 libstdc++）────────
+    if is_plat("cross") then
+        add_cxxflags("-ffunction-sections", "-fdata-sections")
+        add_ldflags("-Wl,--gc-sections")
     end
 
     -- ── 发布模式 ────────────────────────────────────────────
@@ -89,7 +95,7 @@ target("gatekeeper-systemd")
     else
         add_files("src/relay_posix.cpp")
         add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
-        if is_plat("linux") then
+        if is_plat("linux", "cross") then
             add_files("src/relay_linux.cpp")
         end
     end
@@ -114,6 +120,11 @@ target("gatekeeper-systemd")
     -- ── 编译器标志 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
         add_cxxflags("-Wall", "-Wextra", "-Wpedantic")
+    end
+
+    if is_plat("cross") then
+        add_cxxflags("-ffunction-sections", "-fdata-sections")
+        add_ldflags("-Wl,--gc-sections")
     end
 
     -- ── 发布模式 ────────────────────────────────────────────

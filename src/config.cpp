@@ -5,10 +5,24 @@
 #include <fstream>
 #include <sstream>
 
+ControlConfig g_controlConfig;
+
 std::vector<PortConfig> parseConfig(const std::string& json) {
     JsonValue root = parse_json(json);
 
     if (!root.is_obj()) { std::cerr << "错误: 配置格式无效\n"; return {}; }
+    // Parse top-level control block if present
+    if (auto* ctrl = root.get("control")) {
+        if (ctrl->is_obj()) {
+            if (auto* l = ctrl->get("listen")) g_controlConfig.listen = l->as_str();
+            if (auto* a = ctrl->get("auth")) {
+                if (a->is_obj()) {
+                    if (auto* t = a->get("type")) g_controlConfig.auth.type = t->as_str();
+                    if (auto* tk = a->get("token")) g_controlConfig.auth.token = tk->as_str();
+                }
+            }
+        }
+    }
     auto* ports = root.get("ports");
     if (!ports || !ports->is_arr()) { std::cerr << "错误: 缺少 ports 数组\n"; return {}; }
 
