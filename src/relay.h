@@ -47,6 +47,7 @@ class PortRelay {
     std::atomic<pid_t> backendPid_{0};
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
+    std::atomic<bool> pendingRemoval_{false};
     PlatformThread listenThread_{};
     PlatformThread monitorThread_{};
 
@@ -127,6 +128,8 @@ public:
 
     void start();
     void signalStop();
+    void setPendingRemoval() { pendingRemoval_ = true; signalStop(); }
+    bool isPendingRemoval() const { return pendingRemoval_.load(); }
     void stop();
 
     void gracefulStop();

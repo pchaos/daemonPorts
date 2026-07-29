@@ -21,10 +21,10 @@ target("gatekeeper")
     set_languages("c++11")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
     else
         add_files("src/relay_posix.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
         if is_plat("linux", "cross") then
             add_files("src/relay_linux.cpp")
         end
@@ -91,10 +91,10 @@ target("gatekeeper-systemd")
     set_languages("c++11")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
     else
         add_files("src/relay_posix.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
         if is_plat("linux", "cross") then
             add_files("src/relay_linux.cpp")
         end
@@ -163,7 +163,7 @@ target("test-gatekeeper")
             add_files("src/relay_linux.cpp")
         end
     end
-    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp")
+    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/control_server.cpp")
     add_includedirs("test", "src")
 
     -- ── POSIX 平台 ──────────────────────────────────────────

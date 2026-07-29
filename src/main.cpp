@@ -2,7 +2,10 @@
 #include "relay.h"
 #include "tcp_monitor.h"
 #include "port_group.h"
+#include "control_server.h"
 #include <map>
+#include <mutex>
+#include <algorithm>
 
 
 #include <iostream>
@@ -28,6 +31,7 @@
 #define TCP_ESTABLISHED 0x01
 #endif
 
+static std::mutex g_groupsMutex;
 static std::vector<std::unique_ptr<PortGroup>> g_groups;
 
 // systemd sd_notify 支持（编译时添加 -DHAVE_SYSTEMD 启用）
@@ -38,17 +42,29 @@ static std::vector<std::unique_ptr<PortGroup>> g_groups;
 #define NOTIFY_DID_SEND() false
 #endif
 
-static std::vector<std::unique_ptr<PortRelay>> g_relays;
+std::mutex g_relaysMutex;
+std::vector<std::unique_ptr<PortRelay>> g_relays;
 static std::atomic<bool> g_stop{false};
+static std::mutex g_pendingMutex;
+static std::vector<std::unique_ptr<PortRelay>> g_pendingRemoval;
+static std::string g_configPath;
+static std::vector<PortConfig> g_currentCfgs;
+static std::atomic<bool> g_reloadInProgress{false};
 
 static void handleSignal(int) {
     g_stop.store(true);
-	// Stop all groups first
-	for (auto& g : g_groups) {
-		if (g) g->signalStop();
+    // Stop all groups first
+    {
+        std::lock_guard<std::mutex> lock(g_groupsMutex);
+        for (auto& g : g_groups) {
+            if (g) g->signalStop();
+        }
     }
-	// Then stop any remaining relays (non‑grouped or already stopped)
-	for (auto& r : g_relays) r->signalStop();
+    // Then stop any remaining relays (non‑grouped or already stopped)
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto& r : g_relays) r->signalStop();
+    }
 }
 
 #ifdef _WIN32
@@ -84,69 +100,94 @@ static void monitorLoop() {
     }
 
     while (!g_stop.load()) {
-    time_t now = time(nullptr);
-        for (auto& r : g_relays) {
-            if (!r->monitorEnabled()) continue;
-                        // 按端口各自间隔控制采样频率
-            time_t elapsed = now - r->lastSampleTime_;
-            if (elapsed < r->monitorIntervalSec()) continue;
-            r->lastSampleTime_ = now;
-            int port = r->monitorPort();
-            if (port <= 0) continue;
+        time_t now = time(nullptr);
+        // Monitor active connections
+        {
+            std::lock_guard<std::mutex> lock(g_relaysMutex);
+            for (auto& r : g_relays) {
+                if (!r->monitorEnabled()) continue;
+                time_t elapsed = now - r->lastSampleTime_;
+                if (elapsed < r->monitorIntervalSec()) continue;
+                r->lastSampleTime_ = now;
+                int port = r->monitorPort();
+                if (port <= 0) continue;
 
-            TcpSnapshot cur = queryPortConnections(port);
-            int nonListen = 0;
-            for (auto& e : cur.entries) {
-                if (e.state != TCP_LISTEN) nonListen++;
-            }
-            bool active = nonListen > 0;
-            r->updateActivity(active);
-
-            // 日志去重控制
-            bool shouldPrint = true;
-            const std::string& dedup = r->logDedupMode();
-            if (dedup == "off") {
-                // 始终打印
-            } else if (dedup == "throttle") {
-                // 降频：值不变时每 5 轮打印一次
-                if (nonListen == r->lastNonListen_) {
-                    if (++r->logDedupCounter() < 5) shouldPrint = false;
-                    else r->logDedupCounter() = 0;
-                } else {
-                    r->logDedupCounter() = 0;
+                TcpSnapshot cur = queryPortConnections(port);
+                int nonListen = 0;
+                for (auto& e : cur.entries) {
+                    if (e.state != TCP_LISTEN) nonListen++;
                 }
-            } else {
-                // "skip"（默认）：值不变时跳过
-                if (nonListen == r->lastNonListen_) shouldPrint = false;
+                bool active = nonListen > 0;
+                r->updateActivity(active);
+
+                bool shouldPrint = true;
+                const std::string& dedup = r->logDedupMode();
+                if (dedup == "off") {
+                    // always print
+                } else if (dedup == "throttle") {
+                    if (nonListen == r->lastNonListen_) {
+                        if (++r->logDedupCounter() < 5) shouldPrint = false;
+                        else r->logDedupCounter() = 0;
+                    } else {
+                        r->logDedupCounter() = 0;
+                    }
+                } else {
+                    if (nonListen == r->lastNonListen_) shouldPrint = false;
+                }
+                if (!shouldPrint) continue;
+                r->lastNonListen_ = nonListen;
+
+                std::cout << "  [" << r->name() << "] ACTIVE=" << (active ? "1" : "0")
+                          << "  connections=" << cur.entries.size()
+                          << "  non-listen=" << nonListen
+                          << (active ? "" : " (idle)")
+                          << std::endl;
             }
-            if (!shouldPrint) continue;
-            r->lastNonListen_ = nonListen;
-
-            std::cout << "  [" << r->name() << "] ACTIVE=" << (active ? "1" : "0")
-                      << "  connections=" << cur.entries.size()
-                      << "  non-listen=" << nonListen
-                      << (active ? "" : " (idle)")
-                      << std::endl;
         }
-        // 空闲检测：检查每个端口的活跃状态，空闲超过配置时间则关闭后端
-        for (auto& r : g_relays) {
-            if (!r->monitorEnabled()) continue;
-            if (!r->isBackendRunning()) continue;
-            int idleMin = r->idleMinutes();
-            if (r->hasRecentActivity(idleMin)) continue;
-            std::cout << "  [" << r->name() << "] 已空闲 " << idleMin
-                      << " 分钟，关闭后端" << std::endl;
-            if (auto* g = r->group()) g->resetLaunch();
-            r->gracefulStop();
+        // Idle detection and move to pending removal
+        {
+            std::lock_guard<std::mutex> lock(g_relaysMutex);
+            for (auto it = g_relays.begin(); it != g_relays.end(); ) {
+                auto& r = *it;
+                if (!r->monitorEnabled()) { ++it; continue; }
+                if (!r->isBackendRunning()) { ++it; continue; }
+                int idleMin = r->idleMinutes();
+                if (r->hasRecentActivity(idleMin)) { ++it; continue; }
+                std::cout << "  [" << r->name() << "] 已空闲 " << idleMin << " 分钟，关闭后端" << std::endl;
+                if (auto* g = r->group()) g->resetLaunch();
+                r->setPendingRemoval();
+                {
+                    std::lock_guard<std::mutex> plock(g_pendingMutex);
+                    g_pendingRemoval.push_back(std::move(r));
+                }
+                it = g_relays.erase(it);
+            }
         }
-
-        // 逐秒等待，可响应 g_stop
+        // Process pending removal list
+        {
+            std::lock_guard<std::mutex> plock(g_pendingMutex);
+            for (auto it = g_pendingRemoval.begin(); it != g_pendingRemoval.end(); ) {
+                auto& relay = *it;
+                if (!relay->isBackendRunning()) {
+                    std::cout << "  [" << relay->name() << "] 待清理后端已退出，移除" << std::endl;
+                    it = g_pendingRemoval.erase(it);
+                } else if (relay->monitorEnabled()) {
+                    if (!relay->hasRecentActivity(relay->idleMinutes())) {
+                        std::cout << "  [" << relay->name() << "] 待清理后端已空闲 " << relay->idleMinutes() << " 分钟，正在关闭" << std::endl;
+                        relay->gracefulStop();
+                    }
+                    ++it;
+                } else {
+                    ++it;
+                }
+            }
+        }
+        // Sleep interval
         for (int i = 0; i < interval && !g_stop.load(); i++) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-        }
     }
-
+}
 
 static void printHelp() {
     std::cout << "=== 用法 ===\n"
@@ -197,6 +238,114 @@ static void printVersion() {
     std::cout << "gatekeeper v" << GATEKEEPER_VERSION << std::endl;
 }
 
+struct ReloadSummary {
+    std::vector<std::string> added;
+    std::vector<std::string> removed;
+    std::vector<std::string> modified;
+    bool success = true;
+};
+
+bool configsEqual(const PortConfig& a, const PortConfig& b) {
+    return a.listenAddr == b.listenAddr
+        && a.command == b.command
+        && a.mode == b.mode
+        && a.holdPort == b.holdPort
+        && a.delayMs == b.delayMs
+        && a.autoRestart == b.autoRestart
+        && a.enabled == b.enabled
+        && a.groupName == b.groupName
+        && a.stopCommand == b.stopCommand
+        && a.idleMinutes == b.idleMinutes
+        && a.refreshSeconds == b.refreshSeconds
+        && a.retrySeconds == b.retrySeconds
+        && a.maxRetrySeconds == b.maxRetrySeconds
+        && a.stackSize == b.stackSize
+        && a.httpTarget == b.httpTarget
+        && a.monitor.enabled == b.monitor.enabled
+        && a.monitor.intervalSec == b.monitor.intervalSec
+        && a.monitor.logDedup == b.monitor.logDedup;
+}
+
+ReloadSummary reloadConfig(const std::vector<PortConfig>& newCfgs) {
+    ReloadSummary summary;
+    if (g_reloadInProgress.exchange(true)) {
+        std::cerr << "错误: 配置热加载正在进行中，拒绝新请求" << std::endl;
+        summary.success = false;
+        return summary;
+    }
+    std::map<std::string, const PortConfig*> oldMap;
+    for (auto& c : g_currentCfgs) oldMap[c.listenAddr] = &c;
+    std::map<std::string, const PortConfig*> newMap;
+    for (auto& c : newCfgs) newMap[c.listenAddr] = &c;
+    std::vector<PortConfig> toAdd;
+    std::vector<std::string> toRemove;
+    std::vector<PortConfig> toModify;
+    std::vector<std::string> toModifyOld;
+    for (auto it = newMap.begin(); it != newMap.end(); ++it) {
+        const std::string& addr = it->first;
+        const PortConfig* cfg = it->second;
+        auto oldIt = oldMap.find(addr);
+        if (oldIt == oldMap.end()) { toAdd.push_back(*cfg); summary.added.push_back(addr); }
+        else if (!configsEqual(*cfg, *oldIt->second)) { toModify.push_back(*cfg); toModifyOld.push_back(addr); summary.modified.push_back(addr); }
+    }
+    for (auto it = oldMap.begin(); it != oldMap.end(); ++it) {
+        if (newMap.find(it->first) == newMap.end()) { toRemove.push_back(it->first); summary.removed.push_back(it->first); }
+    }
+    // Remove old ports
+    if (!toRemove.empty()) {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto it = g_relays.begin(); it != g_relays.end(); ) {
+            if (std::find(toRemove.begin(), toRemove.end(), (*it)->name()) != toRemove.end()) {
+                (*it)->setPendingRemoval();
+                { std::lock_guard<std::mutex> plock(g_pendingMutex); g_pendingRemoval.push_back(std::move(*it)); }
+                it = g_relays.erase(it);
+            } else { ++it; }
+        }
+    }
+    // Modify old ports (move to pending removal)
+    if (!toModifyOld.empty()) {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto it = g_relays.begin(); it != g_relays.end(); ) {
+            if (std::find(toModifyOld.begin(), toModifyOld.end(), (*it)->name()) != toModifyOld.end()) {
+                (*it)->setPendingRemoval();
+                { std::lock_guard<std::mutex> plock(g_pendingMutex); g_pendingRemoval.push_back(std::move(*it)); }
+                it = g_relays.erase(it);
+            } else { ++it; }
+        }
+    }
+    // Add new and modified ports
+    if (!toAdd.empty() || !toModify.empty()) {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto& cfg : toAdd) { auto relay = std::unique_ptr<PortRelay>(new PortRelay(cfg)); relay->start(); g_relays.push_back(std::move(relay)); }
+        for (auto& cfg : toModify) { auto relay = std::unique_ptr<PortRelay>(new PortRelay(cfg)); relay->start(); g_relays.push_back(std::move(relay)); }
+    }
+    g_currentCfgs = newCfgs;
+    std::cout << "配置热加载完成: +" << summary.added.size() << " / -" << summary.removed.size() << " / ~" << summary.modified.size() << " (添加/删除/修改)" << std::endl;
+    for (auto& name : summary.added) std::cout << "  + " << name << std::endl;
+    for (auto& name : summary.removed) std::cout << "  - " << name << std::endl;
+    for (auto& name : summary.modified) std::cout << "  ~ " << name << std::endl;
+    g_reloadInProgress = false;
+    return summary;
+}
+
+ReloadSummary reloadFromFile() {
+    auto newCfgs = loadConfig(g_configPath);
+    if (newCfgs.empty()) {
+        std::cerr << "错误: 热加载失败，新配置无效，保留当前配置" << std::endl;
+        ReloadSummary s; s.success = false; return s;
+    }
+    return reloadConfig(newCfgs);
+}
+
+ReloadSummary reloadFromJson(const std::string& json) {
+    auto newCfgs = parseConfig(json);
+    if (newCfgs.empty()) {
+        std::cerr << "错误: 热加载失败，新配置无效，保留当前配置" << std::endl;
+        ReloadSummary s; s.success = false; return s;
+    }
+    return reloadConfig(newCfgs);
+}
+
 int main(int argc, char* argv[]) {
     // 先处理 --help/-h/--version（不需要配置文件）
     if (argc >= 2) {
@@ -236,7 +385,9 @@ int main(int argc, char* argv[]) {
         ss << std::cin.rdbuf();
         cfgs = parseConfig(ss.str());
     } else {
-        cfgs = loadConfig(configPath);
+            cfgs = loadConfig(configPath);
+            g_currentCfgs = cfgs;
+            g_configPath = configPath;
     }
     if (cfgs.empty()) {
         std::cerr << "错误: 没有有效的端口配置" << std::endl;
@@ -298,6 +449,11 @@ int main(int argc, char* argv[]) {
     }
 
     for (auto& r : g_relays) r->start();
+    // Start control server
+    static ControlServer g_controlServer(g_controlConfig);
+    if (g_controlServer.isEnabled()) {
+        g_controlServer.start();
+    }
 
     // 启动统一 TCP 监控线程（如果有启用监控的端口）
     std::thread monitorThread;
