@@ -345,3 +345,49 @@ TEST_CASE("parseConfig - proxy 模式: auth 对象不完整时只取已有字段
     CHECK(cfgs[0].auth.username.empty());
     CHECK(cfgs[0].auth.password.empty());
 }
+
+// ControlConfig parsing - with control block present
+TEST_CASE("parseConfig - control block present") {
+    g_controlConfig = ControlConfig();
+    auto cfgs = parseConfig(R"({
+        "control": {
+            "listen": ":19999",
+            "auth": { "type": "token", "token": "my-secret" }
+        },
+        "ports": [
+            { "listen": ":3000", "command": "./a" }
+        ]
+    })");
+    CHECK(cfgs.size() == 1);
+    CHECK(g_controlConfig.listen == ":19999");
+    CHECK(g_controlConfig.auth.type == "token");
+    CHECK(g_controlConfig.auth.token == "my-secret");
+}
+
+// ControlConfig parsing - no control block
+TEST_CASE("parseConfig - no control block") {
+    g_controlConfig = ControlConfig();
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":3000", "command": "./a" }
+        ]
+    })");
+    CHECK(cfgs.size() == 1);
+    CHECK(g_controlConfig.listen.empty());
+    CHECK(g_controlConfig.auth.type == "none");
+}
+
+// ControlConfig parsing - auth none
+TEST_CASE("parseConfig - control auth none") {
+    g_controlConfig = ControlConfig();
+    auto cfgs = parseConfig(R"({
+        "control": { "listen": ":19999" },
+        "ports": [{ "listen": ":3000", "command": "./a" }]
+    })");
+    CHECK(g_controlConfig.listen == ":19999");
+    CHECK(g_controlConfig.auth.type == "none");
+}
+
+// configsEqual tests
+
+
