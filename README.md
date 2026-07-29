@@ -25,6 +25,7 @@
 - **simple 模式**：引导后释放端口，后端直接接管
 - **mixed 模式**：协议感知引导 或 常驻代理转发，支持 HTTP / SOCKS5 / SOCKS4
 - **proxy 模式**：SOCKS5 代理服务器，支持无认证 / USER+PASS 认证，转发到 HTTP 后端
+- **控制端口热加载**：通过 HTTP 控制端口运行时热加载配置，支持 Token 认证，无需重启进程
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
@@ -41,6 +42,7 @@ daemonPorts/
 ├── src/
 │   ├── main.cpp              # 程序入口，统一监控线程
 │   ├── config.h/cpp           # 配置解析（JSON）
+│   ├── control_server.h/cpp   # 控制端口服务器（热加载）
 │   ├── relay.h/cpp            # PortRelay 类，端口接力核心（平台无关）
 │   ├── relay_platform.h       # 平台抽象层接口 + 跨平台类型定义
 │   ├── relay_posix.cpp        # POSIX 实现（Linux / macOS / BSD）

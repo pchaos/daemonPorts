@@ -410,6 +410,90 @@ TCP 连接监控已启动，轮询间隔 60 秒
 
 ---
 
+## 控制端口配置
+
+gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需重启进程。
+
+### 配置方式
+
+在 config.json 顶层添加 `control` 对象：
+
+```json
+{
+  "control": {
+    "listen": ":19999",
+    "auth": {
+      "type": "token",
+      "token": "my-secret-token"
+    }
+  },
+  "ports": []
+}
+```
+
+### 配置字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `control.listen` | string | `""` | 控制端口监听地址，如 `":19999"`。为空时不启动控制端口 |
+| `control.auth.type` | string | `"none"` | 认证方式：`"none"`（无认证）或 `"token"`（Token 认证） |
+| `control.auth.token` | string | `""` | Token 值，`auth.type` 为 `"token"` 时必填 |
+
+### CLI 快捷方式
+
+也可以通过命令行参数 `--control-port` 指定控制端口地址，优先级高于 config.json：
+
+```bash
+./gatekeeper --control-port :19999 gatekeeper-config.json
+```
+
+### HTTP 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
+| `GET /status` | GET | 返回当前端口运行状态 JSON |
+| `POST /reload` | POST | 重新读取配置文件并应用变更 |
+| `POST /config` | POST | 接收请求体中的新配置 JSON 并应用 |
+
+### 认证
+
+当 `auth.type` 为 `"token"` 时，所有请求需要在 HTTP 头中携带 Token：
+
+```bash
+curl -X POST http://127.0.0.1:19999/reload \
+  -H "X-Auth-Token: my-secret-token"
+```
+
+无认证或 Token 错误时返回 `401 Unauthorized`。
+
+### 热加载行为
+
+`POST /reload` 触发配置重新加载，gatekeeper 会：
+
+1. 按 `listenAddr` 对比新旧配置
+2. **新增端口**：自动创建并启动新的监听线程
+3. **删除端口**：旧端口标记为 `pendingRemoval`，停止接受新连接，等待后端空闲后自动停止
+4. **修改端口**：旧端口标记为 `pendingRemoval`，同时创建并启动新端口
+5. **未变化端口**：保持不变
+
+> **注意**：删除/修改端口时，旧后端不会立即停止，而是等待空闲超时（`idle_minutes`）后自动 `gracefulStop()`，确保活跃连接不受影响。
+
+### 示例
+
+```bash
+# 健康检查
+curl http://127.0.0.1:19999/health
+
+# 触发配置重新加载
+curl -X POST http://127.0.0.1:19999/reload
+
+# 直接发送新配置
+curl -X POST http://127.0.0.1:19999/config \
+  -H "Content-Type: application/json" \
+  -d '{"ports":[{"listen":":3000","command":"./app"}]}'
+```
+
 ## 配置加载方式
 
 ### 从文件加载
