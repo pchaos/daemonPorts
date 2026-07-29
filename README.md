@@ -60,6 +60,8 @@ daemonPorts/
 │   ├── test_retry.cpp         # 重试/退避测试
 │   ├── test_port_group.cpp    # 分组协调测试
 │   ├── test_tcp_monitor.cpp   # TCP 监控测试
+│   ├── test_control_server.cpp # 控制端口测试
+│   ├── test_stubs.cpp          # 测试桩（链接辅助）
 │   └── test_idle.cpp          # 空闲超时测试
 ├── scripts/
 │   ├── build-arm64.sh         # ARM64 交叉编译脚本
