@@ -29,6 +29,7 @@ void PortGroup::onConnection(PortRelay * /*source*/) {
       pid_t pid = r->launchBackend();
       if (pid > 0) {
         r->backendPid_ = pid;
+        r->lastActiveTime_ = time(nullptr);
         std::cout << "  [" << r->name_ << "] 后端已启动 (PID=" << pid << ")"
                   << std::endl;
       }

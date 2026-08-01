@@ -6,11 +6,11 @@
       "listen": ":20128",
       "command": "/home/user/.nvm/versions/node/current/bin/node /home/user/.nvm/versions/node/current/lib/node_modules/9router/cli.js start --host 0.0.0.0 -p 20128 --skip-update --no-browser",
       "stop_command": "/home/user/.nvm/versions/node/current/bin/node /home/user/9router/cli.js stop",
-      "idle_minutes": 20,
+      "idle_minutes": 30,
       "monitor": {
         "enabled": true,
         "interval_seconds": 60,
-        "log_dedup": "off"
+        "log_dedup": "throttle"
       },
       "delay": 30000,
       "refresh_seconds": 15,

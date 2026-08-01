@@ -221,6 +221,7 @@ void PortRelay::listenLoop() {
                 pid_t pid = launchBackend();
                 if (pid < 0) break;
                 backendPid_ = pid;
+                lastActiveTime_ = time(nullptr);
                 std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
 
                 int lfd = listenFd_.exchange(-1);
@@ -1046,6 +1047,44 @@ if (!platform::isChildAlive(backendPid_)) {
 platform::killProcess(backendPid_);
     std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
     backendPid_ = 0;
+}
+
+void PortRelay::resetForIdle() {
+    if (platform::threadValid(listenThread_)) platform::joinThread(listenThread_);
+    if (platform::threadValid(monitorThread_)) platform::joinThread(monitorThread_);
+    if (platform::threadValid(proxyMonitorThread_)) platform::joinThread(proxyMonitorThread_);
+
+    stop_.store(false);
+    pendingRemoval_.store(false);
+    groupReleased_.store(false);
+    listenFd_.store(-1);
+
+    if (mode_ == "mixed") {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
+            static_cast<PortRelay*>(arg)->mixedListenLoop();
+            return nullptr;
+        }, this, stackSize_);
+        if (holdPort_) {
+            platform::createThread(proxyMonitorThread_, [] (void* arg) -> void* {
+                static_cast<PortRelay*>(arg)->proxyMonitorLoop();
+                return nullptr;
+            }, this, stackSize_);
+        }
+    } else if (mode_ == "proxy") {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
+            static_cast<PortRelay*>(arg)->socks5ListenLoop();
+            return nullptr;
+        }, this, stackSize_);
+    } else {
+        platform::createThread(listenThread_, [] (void* arg) -> void* {
+            static_cast<PortRelay*>(arg)->listenLoop();
+            return nullptr;
+        }, this, stackSize_);
+    }
+    platform::createThread(monitorThread_, [] (void* arg) -> void* {
+        static_cast<PortRelay*>(arg)->monitorBackend();
+        return nullptr;
+    }, this, stackSize_);
 }
 
 // Group coordination implementations

@@ -133,6 +133,8 @@ public:
     void stop();
 
     void gracefulStop();
+    void resetForIdle();
+    bool autoRestart() const { return autoRestart_; }
     bool isBackendRunning() const { return backendPid_.load() > 0; }
     PortGroup* group() const { return group_; }
     int idleMinutes() const { return idleMinutes_; }

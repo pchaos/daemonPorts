@@ -169,8 +169,16 @@ static void monitorLoop() {
             for (auto it = g_pendingRemoval.begin(); it != g_pendingRemoval.end(); ) {
                 auto& relay = *it;
                 if (!relay->isBackendRunning()) {
-                    std::cout << "  [" << relay->name() << "] 待清理后端已退出，移除" << std::endl;
-                    it = g_pendingRemoval.erase(it);
+                    if (relay->autoRestart()) {
+                        relay->resetForIdle();
+                        std::cout << "  [" << relay->name() << "] 后端已退出，重新监听端口" << std::endl;
+                        std::lock_guard<std::mutex> lock(g_relaysMutex);
+                        g_relays.push_back(std::move(*it));
+                        it = g_pendingRemoval.erase(it);
+                    } else {
+                        std::cout << "  [" << relay->name() << "] 待清理后端已退出，移除" << std::endl;
+                        it = g_pendingRemoval.erase(it);
+                    }
                 } else if (relay->monitorEnabled()) {
                     if (!relay->hasRecentActivity(relay->idleMinutes())) {
                         std::cout << "  [" << relay->name() << "] 待清理后端已空闲 " << relay->idleMinutes() << " 分钟，正在关闭" << std::endl;

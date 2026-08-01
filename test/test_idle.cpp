@@ -19,3 +19,23 @@ TEST_CASE("idle detection triggers gracefulStop") {
     // backendPid_ should be cleared
     CHECK(relay.backendPid_ == 0);
 }
+
+TEST_CASE("resetForIdle restarts after gracefulStop") {
+    PortConfig cfg;
+    cfg.listenAddr = ":9999";
+    cfg.command = "true";
+    cfg.refreshSeconds = 5;
+    cfg.idleMinutes = 1;
+    cfg.autoRestart = true;
+    PortRelay relay(cfg);
+    relay.backendPid_ = 12345;
+    relay.gracefulStop();
+    CHECK(relay.backendPid_ == 0);
+    CHECK(relay.isBackendRunning() == false);
+    relay.resetForIdle();
+    CHECK(relay.stop_ == false);
+    CHECK(relay.isPendingRemoval() == false);
+    CHECK(relay.isBackendRunning() == false);
+    // Clean up threads created by resetForIdle
+    relay.stop();
+}
