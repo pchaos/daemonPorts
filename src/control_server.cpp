@@ -15,6 +15,7 @@ struct ReloadSummary {
 #include <map>
 #include <cctype>
 #include <cstring>
+#include <arpa/inet.h>
 
 extern ReloadSummary reloadFromFile();
 extern ReloadSummary reloadFromJson(const std::string& json);
@@ -76,15 +77,31 @@ void ControlServer::serverLoop() {
     platform::set_sockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (platform::bind_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) { platform::close_fd(fd); return; }
     if (platform::listen_fd(fd, 128) < 0) { platform::close_fd(fd); return; }
+    // Non-blocking listener so accept() returns immediately when no connection
+    if (platform::set_nonblock(fd, 1) < 0) { platform::close_fd(fd); return; }
     listenFd_ = fd;
     std::cout << "[ControlServer] listening on " << config_.listen << std::endl;
     while (!stop_.load()) {
         sockaddr_in cli; int len = sizeof(cli);
         int client = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
         if (client < 0) {
-            if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
+            if (stop_.load() || platform::last_error() == PLATFORM_EINVAL || platform::last_error() == EBADF || platform::last_error() == EAGAIN || platform::last_error() == EWOULDBLOCK) continue;
             continue;
         }
+        // Get client IP for rate limiting
+        char clientIp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &cli.sin_addr, clientIp, sizeof(clientIp));
+
+        // Per-IP sliding-window rate limiter
+        if (!rateLimiter_.allow(clientIp)) {
+            sendError(client, 429, "Too Many Requests");
+            platform::close_fd(client);
+            continue;
+        }
+
+        // Set recv timeout so slow/idle clients don't hold the connection
+        platform::set_recv_timeout(client, 15);
+
         handleRequest(client);
         platform::close_fd(client);
     }

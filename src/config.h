@@ -68,8 +68,10 @@ struct ControlAuth {
 };
 
 struct ControlConfig {
-    std::string listen; // e.g. ":19999", empty = disabled
+    std::string listen;                // e.g. ":19999", empty = disabled
     ControlAuth auth;
+    int maxConnections = 20;           // rate limit: max connections per window
+    int rateLimitSeconds = 60;         // rate limit: window size in seconds
 };
 
 extern ControlConfig g_controlConfig;

@@ -1,6 +1,5 @@
 #ifndef GATEKEEPER_RELAY_PLATFORM_H
 #define GATEKEEPER_RELAY_PLATFORM_H
-
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -8,7 +7,6 @@
 // ── Platform-specific system headers ──────────────────────────────────
 // relay.cpp includes relay_platform.h (via relay.h) and gets everything
 // it needs without any direct POSIX/Winsock #include.
-
 #ifndef _WIN32
 #include <sys/types.h>      // pid_t, mode_t
 #include <sys/socket.h>     // socket, bind, setsockopt, sockaddr, socklen_t
@@ -19,11 +17,9 @@
 #include <unistd.h>         // close, read, write, usleep
 #include <signal.h>         // kill, SIGTERM, SIGKILL
 #include <pthread.h>        // pthread_t, pthread_create, etc.
-
 using pid_t = ::pid_t;
 using PlatformThread = pthread_t;
 using PlatformHandle = int;
-
 #else  // _WIN32
 // Order matters: winsock2.h must be before windows.h
 #define NOMINMAX
@@ -32,14 +28,12 @@ using PlatformHandle = int;
 #include <ws2tcpip.h>       // getaddrinfo, freeaddrinfo, inet_pton
 #include <windows.h>
 #include <io.h>
-
 using pid_t = intptr_t;
 using PlatformThread = std::thread;
 using PlatformHandle = intptr_t;
 // ssize_t is not a standard Windows type; define it as intptr_t
 // (same signed-size semantics as POSIX ssize_t)
 using ssize_t = intptr_t;
-
 #endif
 
 // SOCK_CLOEXEC is a Linux extension; not available on macOS or Windows.
@@ -72,7 +66,6 @@ using ssize_t = intptr_t;
 #define PLATFORM_EADDRINUSE WSAEADDRINUSE
 #define PLATFORM_EACCES WSAEACCES
 #endif
-
 namespace platform {
 
 // Socket lifecycle
@@ -91,6 +84,12 @@ ssize_t recv_peek_fd(PlatformHandle fd, void* buf, size_t len);
 
 // Socket options
 int set_sockopt(PlatformHandle fd, int level, int optname, const void* optval, int optlen);
+
+// Set recv timeout on a socket (0 disables timeout)
+int set_recv_timeout(PlatformHandle fd, int seconds);
+
+// Set socket to non-blocking mode (0 = blocking, 1 = non-blocking)
+int set_nonblock(PlatformHandle fd, int nonblock);
 
 // Address resolution (getaddrinfo wrapper)
 int getaddrinfo_wrap(const char* node, const char* service,
@@ -112,7 +111,6 @@ void termProcess(pid_t pid);
 bool isChildAlive(pid_t pid);
 pid_t waitChild(pid_t pid);
 bool isProcessRunning(pid_t pid);
-
 void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int stackSizeKB);
 void joinThread(PlatformThread& thread);
 bool threadValid(const PlatformThread& thread);
@@ -120,7 +118,5 @@ bool threadValid(const PlatformThread& thread);
 // ── Procfs helpers (Linux only; other platforms return empty) ────────
 pid_t findPidUsingPort(uint16_t port);
 std::string findProcessUsingPort(uint16_t port);
-
 } // namespace platform
-
 #endif

@@ -460,6 +460,7 @@ int main(int argc, char* argv[]) {
     // Start control server
     static ControlServer g_controlServer(g_controlConfig);
     if (g_controlServer.isEnabled()) {
+        g_controlServer.setRateLimit(g_controlConfig.maxConnections, g_controlConfig.rateLimitSeconds);
         g_controlServer.start();
     }
 

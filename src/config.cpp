@@ -19,6 +19,8 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
                 if (a->is_obj()) {
                     if (auto* t = a->get("type")) g_controlConfig.auth.type = t->as_str();
                     if (auto* tk = a->get("token")) g_controlConfig.auth.token = tk->as_str();
+                    if (auto* mc = ctrl->get("max_connections")) g_controlConfig.maxConnections = (int)mc->as_num();
+                    if (auto* rs = ctrl->get("rate_limit_seconds")) g_controlConfig.rateLimitSeconds = (int)rs->as_num();
                 }
             }
         }

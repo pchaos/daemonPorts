@@ -1,11 +1,22 @@
 #include "relay_platform.h"
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <sstream>
+#include <dirent.h>
+#include <algorithm>
+#include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 
 namespace platform {
 
-// ── Socket lifecycle ─────────────────────────────────────────────────
+#ifndef __linux__
+pid_t findPidUsingPort(uint16_t) { return 0; }
+std::string findProcessUsingPort(uint16_t) { return ""; }
+#endif
 
+// ── Socket lifecycle ─────────────────────────────────────────────────
 PlatformHandle socket_ai(int family, int type, int protocol) {
     return ::socket(family, type, protocol);
 }
@@ -25,7 +36,6 @@ int connect_fd(PlatformHandle fd, const void* addr, int len) {
 int close_fd(PlatformHandle fd) { return ::close(fd); }
 
 // ── I/O ───────────────────────────────────────────────────────────────
-
 ssize_t read_fd(PlatformHandle fd, void* buf, size_t len) {
     return ::read(fd, buf, len);
 }
@@ -40,15 +50,25 @@ ssize_t recv_peek_fd(PlatformHandle fd, void* buf, size_t len) {
 }
 
 // ── Socket options ────────────────────────────────────────────────────
-
 int set_sockopt(PlatformHandle fd, int level, int optname,
                 const void* optval, int optlen) {
     return ::setsockopt(fd, level, optname, optval,
                         static_cast<socklen_t>(optlen));
 }
 
-// ── Address resolution ────────────────────────────────────────────────
+int set_recv_timeout(PlatformHandle fd, int seconds) {
+    struct timeval tv = { seconds, 0 };
+    return ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
 
+int set_nonblock(PlatformHandle fd, int nonblock) {
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    flags = nonblock ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    return ::fcntl(fd, F_SETFL, flags);
+}
+
+// ── Address resolution ────────────────────────────────────────────────
 int getaddrinfo_wrap(const char* node, const char* service,
                      const struct addrinfo* hints, struct addrinfo** res) {
     return ::getaddrinfo(node, service, hints, res);
@@ -57,14 +77,11 @@ void freeaddrinfo_wrap(struct addrinfo* res) {
     ::freeaddrinfo(res);
 }
 
-// ── Address conversion ────────────────────────────────────────────────
-
 int inet_pton_wrap(int af, const char* src, void* dst) {
     return ::inet_pton(af, src, dst);
 }
 
 // ── Error handling ────────────────────────────────────────────────────
-
 int last_error() { return errno; }
 bool last_error_is(int code) { return errno == code; }
 std::string last_error_str() {
@@ -72,13 +89,11 @@ std::string last_error_str() {
 #ifdef _GNU_SOURCE
     return strerror_r(errno, buf, sizeof(buf)) ? "unknown error" : buf;
 #else
-    // XSI-compliant strerror_r returns int
     return strerror_r(errno, buf, sizeof(buf)) == 0 ? buf : "unknown error";
 #endif
 }
 
 // ── Process / thread ────────────────────────────────────────────────
-
 pid_t launchProcess(const std::string& command) {
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -117,7 +132,7 @@ void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int s
 void joinThread(PlatformThread& thread) { pthread_join(thread, nullptr); }
 bool threadValid(const PlatformThread& thread) { return thread != 0; }
 
-// ── procfs stubs for non-Linux POSIX (macOS, BSD) ──
+// ── Procfs stubs for non-Linux POSIX (macOS, BSD) ──
 #ifndef __linux__
 pid_t findPidUsingPort(uint16_t) { return 0; }
 std::string findProcessUsingPort(uint16_t) { return ""; }

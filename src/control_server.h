@@ -4,15 +4,46 @@
 #include "config.h"
 #include "relay_platform.h"
 #include <string>
+#include <ctime>
 #include <map>
 #include <atomic>
+#include <iostream>
 
 class ControlServer {
     ControlConfig config_;
     std::atomic<bool> stop_{false};
     PlatformThread thread_{};
     int listenFd_{-1};
+    struct RateLimiter {
+        std::map<std::string, std::vector<long long>> window;
+        int maxConnections = 20;
+        long long windowMs = 60000;
+        long long nowMs() {
+            struct timespec ts;
+            ::clock_gettime(CLOCK_MONOTONIC, &ts);
+            return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+        }
+        bool allow(const std::string& ip) {
+            long long now = nowMs();
+            auto& timestamps = window[ip];
+            auto it = timestamps.begin();
+            while (it != timestamps.end() && (now - *it) >= windowMs) {
+                it = timestamps.erase(it);
+            }
+            if (static_cast<int>(timestamps.size()) >= maxConnections) {
+                return false;
+            }
+            timestamps.push_back(now);
+            return true;
+        }
+    };
+    RateLimiter rateLimiter_;
 public:
+    // Override rate limit parameters (useful for testing and config)
+    void setRateLimit(int maxConnections, int windowSeconds) {
+        rateLimiter_.maxConnections = maxConnections;
+        rateLimiter_.windowMs = static_cast<long long>(windowSeconds) * 1000;
+    }
     explicit ControlServer(const ControlConfig& cfg);
     void start();
     void stop();

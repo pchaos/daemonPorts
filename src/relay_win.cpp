@@ -65,6 +65,18 @@ int set_sockopt(PlatformHandle fd, int level, int optname,
                         static_cast<const char*>(optval), optlen) == SOCKET_ERROR ? -1 : 0;
 }
 
+int set_recv_timeout(PlatformHandle fd, int seconds) {
+    SOCKET s = static_cast<SOCKET>(fd);
+    DWORD ms = static_cast<DWORD>(seconds * 1000);
+    return ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms)) == SOCKET_ERROR ? -1 : 0;
+}
+
+int set_nonblock(PlatformHandle fd, int nonblock) {
+    SOCKET s = static_cast<SOCKET>(fd);
+    u_long mode = nonblock ? 1 : 0;
+    return ::ioctlsocket(s, FIONBIO, &mode) == SOCKET_ERROR ? -1 : 0;
+}
+
 // ── Address resolution ────────────────────────────────────────────────
 
 int getaddrinfo_wrap(const char* node, const char* service,
