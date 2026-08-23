@@ -66,7 +66,7 @@ std::vector<PortConfig> loadConfig(const std::string& path);
 
 // Control configuration structs
 struct ControlAuth {
-    std::string type = "none"; // "none" | "token"
+    std::string type = "token"; // "none" | "token" (default: token for security)
     std::string token;
 };
 

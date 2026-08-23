@@ -6,6 +6,9 @@
 #include <map>
 #include <mutex>
 #include <algorithm>
+#include <random>
+#include <chrono>
+#include <iomanip>
 
 
 #include <iostream>
@@ -460,10 +463,39 @@ int main(int argc, char* argv[]) {
 
     for (auto& r : g_relays) r->start();
     // Start control server
+    if (g_controlConfig.auth.type == "token" && g_controlConfig.auth.token.empty()) {
+        // Generate a random hex token (32 chars = 128 bits)
+        std::mt19937_64 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+        std::ostringstream oss;
+        oss << std::hex << std::setfill('0');
+        for (int i = 0; i < 4; i++)
+            oss << std::setw(16) << rng();
+        g_controlConfig.auth.token = oss.str();
+    }
     static ControlServer g_controlServer(g_controlConfig);
     if (g_controlServer.isEnabled()) {
+        const std::string& ln = g_controlConfig.listen;
+        auto pos = ln.find(':');
+        std::string host = (pos == std::string::npos) ? ln : ln.substr(0, pos);
+        bool exposed = (host.empty() || host == "0.0.0.0");
+        if (exposed && g_controlConfig.auth.type != "token") {
+            std::cerr << "[ControlServer] 严重警告: 控制端口绑定在所有网卡且无认证，"
+                      << "任何能访问该端口的人都可执行任意命令！"
+                      << "建议配置 auth 或改用 127.0.0.1" << ln.substr(pos) << std::endl;
+        }
         g_controlServer.setRateLimit(g_controlConfig.maxConnections, g_controlConfig.rateLimitSeconds);
         g_controlServer.start();
+        std::cout << "[ControlServer] 控制接口: http://" << ln << std::endl;
+        if (exposed) {
+            std::cout << "[ControlServer] 提示: 已按配置绑定所有网卡(0.0.0.0)" << std::endl;
+        }
+        if (g_controlConfig.auth.type == "token") {
+            std::cout << "[ControlServer] 认证令牌: " << g_controlConfig.auth.token << std::endl;
+            std::cout << "[ControlServer] 使用: curl -H 'x-auth-token: " << g_controlConfig.auth.token
+                      << "' http://" << ln << "/health" << std::endl;
+        } else {
+            std::cout << "[ControlServer] 警告: 控制接口未启用认证，限制局域网访问" << std::endl;
+        }
     }
 
     // 启动统一 TCP 监控线程（如果有启用监控的端口）

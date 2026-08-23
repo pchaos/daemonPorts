@@ -374,14 +374,14 @@ TEST_CASE("parseConfig - no control block") {
     })");
     CHECK(cfgs.size() == 1);
     CHECK(g_controlConfig.listen.empty());
-    CHECK(g_controlConfig.auth.type == "none");
+    CHECK(g_controlConfig.auth.type == "token");
 }
 
-// ControlConfig parsing - auth none
+// ControlConfig parsing - auth none explicitly set
 TEST_CASE("parseConfig - control auth none") {
     g_controlConfig = ControlConfig();
     auto cfgs = parseConfig(R"({
-        "control": { "listen": ":19999" },
+        "control": { "listen": ":19999", "auth": { "type": "none" } },
         "ports": [{ "listen": ":3000", "command": "./a" }]
     })");
     CHECK(g_controlConfig.listen == ":19999");

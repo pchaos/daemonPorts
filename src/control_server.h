@@ -7,6 +7,7 @@
 #include <ctime>
 #include <map>
 #include <atomic>
+#include <mutex>
 #include <iostream>
 
 class ControlServer {
@@ -16,6 +17,7 @@ class ControlServer {
     int listenFd_{-1};
     struct RateLimiter {
         std::map<std::string, std::vector<long long>> window;
+        std::mutex mtx_;
         int maxConnections = 20;
         long long windowMs = 60000;
         long long nowMs() {
@@ -24,6 +26,7 @@ class ControlServer {
             return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
         }
         bool allow(const std::string& ip) {
+            std::lock_guard<std::mutex> lock(mtx_);
             long long now = nowMs();
             auto& timestamps = window[ip];
             auto it = timestamps.begin();

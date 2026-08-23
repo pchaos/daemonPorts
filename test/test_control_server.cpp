@@ -37,6 +37,7 @@ static int httpRequest(int fd, uint16_t port) {
 TEST_CASE("ControlServer - rate limiter blocks after maxConnections") {
     ControlConfig cfg;
     cfg.listen = ":19997";
+    cfg.auth.type = "none";  // explicit no-auth for rate-limit testing
     ControlServer server(cfg);
     server.setRateLimit(2, 60);
     server.start();
@@ -72,6 +73,7 @@ TEST_CASE("ControlServer - rate limiter blocks after maxConnections") {
 TEST_CASE("ControlServer - rate limiter window expiry") {
     ControlConfig cfg;
     cfg.listen = ":19996";
+    cfg.auth.type = "none";  // explicit no-auth for rate-limit testing
     ControlServer server(cfg);
     server.setRateLimit(2, 1);
     server.start();
