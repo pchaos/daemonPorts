@@ -51,6 +51,9 @@ struct PortConfig {
     AuthConfig  auth;               // SOCKS5 认证配置（proxy mode）
     std::string httpTarget;         // HTTP 转发目标地址（proxy mode），如 "127.0.0.1:8080"
 
+    // 启动时自动启动后端（首启一次性，热加载 / autoRestart 不触发）
+    bool launchOnStart = false;
+
     // TCP 连接监控（可选）
     MonitorConfig monitor;
 };

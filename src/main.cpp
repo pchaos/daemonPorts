@@ -271,7 +271,8 @@ bool configsEqual(const PortConfig& a, const PortConfig& b) {
         && a.httpTarget == b.httpTarget
         && a.monitor.enabled == b.monitor.enabled
         && a.monitor.intervalSec == b.monitor.intervalSec
-        && a.monitor.logDedup == b.monitor.logDedup;
+        && a.monitor.logDedup == b.monitor.logDedup
+        && a.launchOnStart == b.launchOnStart;
 }
 
 ReloadSummary reloadConfig(const std::vector<PortConfig>& newCfgs) {
@@ -422,6 +423,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  " << c.listenAddr << " -> \"" << c.command << "\"" << std::endl;
         if (c.monitor.enabled) anyMonitor = true;
         auto relayPtr = std::unique_ptr<PortRelay>(new PortRelay(c));
+        if (c.launchOnStart) relayPtr->setLaunchOnStart(true);
         PortRelay* rawPtr = relayPtr.get();
         g_relays.push_back(std::move(relayPtr));
         if (!c.groupName.empty()) {

@@ -112,6 +112,23 @@ pid_t PortRelay::launchBackend() {
     return platform::launchProcess(command_);
 }
 
+void PortRelay::launchAndRelease() {
+    pid_t pid = launchBackend();
+    if (pid < 0) return;
+    backendPid_ = pid;
+    lastActiveTime_ = time(nullptr);
+    std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
+
+    int lfd = listenFd_.exchange(-1);
+    if (lfd >= 0) platform::close_fd(lfd);
+    std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
+
+    if (!waitForBackend(delayMs_))
+        std::cerr << "  [" << name_ << "] 警告: 后端可能未就绪" << std::endl;
+    else
+        std::cout << "  [" << name_ << "] 后端就绪，端口已移交" << std::endl;
+}
+
 bool PortRelay::waitForBackend(int ms) {
     sockaddr_in sa;
     if (!parseSockaddr(listenAddr_, sa)) return false;
@@ -198,6 +215,11 @@ void PortRelay::listenLoop() {
 
         std::cout << "  [" << name_ << "] 监听 " << listenAddr_ << std::endl;
 
+        // launch_on_start: 绑定成功后立即启动后端并释放端口，跳过 accept 循环
+        if (launchOnStart_) {
+            launchOnStart_ = false;
+            launchAndRelease();
+        } else {
         while (!stop_.load()) {
             sockaddr_in cli;
             int len = sizeof(cli);
@@ -218,23 +240,10 @@ void PortRelay::listenLoop() {
             }
 
             if (backendPid_ == 0) {
-                pid_t pid = launchBackend();
-                if (pid < 0) break;
-                backendPid_ = pid;
-                lastActiveTime_ = time(nullptr);
-                std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")" << std::endl;
-
-                int lfd = listenFd_.exchange(-1);
-                if (lfd >= 0) platform::close_fd(lfd);
-                std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
-
-                if (!waitForBackend(delayMs_))
-                    std::cerr << "  [" << name_ << "] 警告: 后端可能未就绪" << std::endl;
-                else
-                    std::cout << "  [" << name_ << "] 后端就绪，端口已移交" << std::endl;
-
+                launchAndRelease();
                 break;
             }
+        }
         }
 
         int fd = listenFd_.exchange(-1);
@@ -809,6 +818,13 @@ void PortRelay::mixedListenLoop() {
             std::cerr << "  [" << name_ << "] 错误: 没有有效的协议配置" << std::endl;
             return;
         }
+        // launch_on_start: 预启动所有协议后端
+        if (launchOnStart_) {
+            launchOnStart_ = false;
+            for (auto& bs : backends_) {
+                launchProtocolBackend(bs);
+            }
+        }
     }
 
     // 主循环（hold_port=true 和 hold_port=false 共用）
@@ -842,6 +858,12 @@ void PortRelay::mixedListenLoop() {
 
         std::cout << "  [" << name_ << "] 混合模式监听 " << listenAddr_
                   << (holdPort_ ? " (hold_port=true)" : "") << std::endl;
+
+        // launch_on_start: 绑定成功后立即启动后端，跳过 accept 循环
+        if (!holdPort_ && launchOnStart_) {
+            launchOnStart_ = false;
+            launchAndRelease();
+        } else {
 
         while (!stop_.load()) {
             sockaddr_in cli;
@@ -893,24 +915,11 @@ void PortRelay::mixedListenLoop() {
 
                 // 第一个连接触发后端启动
                 if (backendPid_ == 0) {
-                    pid_t pid = launchBackend();
-                    if (pid < 0) break;
-                    backendPid_ = pid;
-                    std::cout << "  [" << name_ << "] 后端已启动 (PID=" << pid << ")"
-                              << std::endl;
-
-                    int lfd = listenFd_.exchange(-1);
-                    if (lfd >= 0) platform::close_fd(lfd);
-                    std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
-
-                    if (!waitForBackend(delayMs_))
-                        std::cerr << "  [" << name_ << "] 警告: 后端可能未就绪" << std::endl;
-                    else
-                        std::cout << "  [" << name_ << "] 后端就绪，端口已移交" << std::endl;
-
+                    launchAndRelease();
                     break;
                 }
             }
+        }
         }
 
         if (listenFd_ >= 0) {

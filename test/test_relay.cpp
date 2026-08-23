@@ -180,3 +180,30 @@ TEST_CASE("signalStop - idempotent and non-blocking") {
     relay.stop();
     CHECK(relay.stop_.load() == true);
 }
+
+TEST_CASE("setLaunchOnStart - 方法可调用且不崩溃") {
+    PortConfig cfg;
+    cfg.listenAddr = ":0";
+    cfg.command = "";
+    PortRelay relay(cfg);
+
+    // 默认构造后不设置
+    // 安全调用 setter
+    relay.setLaunchOnStart(true);
+    relay.setLaunchOnStart(false);
+    relay.setLaunchOnStart(true);
+
+    // 再次设置应该是安全的（幂等）
+    relay.setLaunchOnStart(true);
+    relay.setLaunchOnStart(false);
+}
+
+TEST_CASE("launchAndRelease - 无监听 fd 时安全调用") {
+    PortConfig cfg;
+    cfg.listenAddr = ":0";
+    cfg.command = "";
+    PortRelay relay(cfg);
+
+    // 空 command 会 fork 一个 sh 子进程并设置 backendPid_，此处只验证调用不崩溃不阻塞
+    relay.launchAndRelease();
+}

@@ -36,6 +36,7 @@
 | `retry_seconds` | number | `10` | 绑定失败后的初始重试间隔(秒)（需 `auto_restart: true`） |
 | `max_retry_seconds` | number | `300` | 重试惩罚机制的上限(秒)，超过此值不再增加 |
 | `auto_restart` | bool | `false` | 后端退出后，下次访问时是否自动重新启动 |
+| `launch_on_start` | bool | `false` | gatekeeper 启动时立即启动后端（首启一次性，热加载不触发） |
 | `stack_size` | number | `512` | 该端口的监听线程栈大小(KB)，默认 512KB |
 | `idle_minutes` | number | `20` | 空闲超时分钟数，启用 TCP 监控后，超过此时间无活跃连接则关闭后端 |
 | `hold_port` | bool | `false` | `mixed` 模式下是否持住端口：`false`=引导后释放，`true`=gatekeeper 常驻做代理转发 |

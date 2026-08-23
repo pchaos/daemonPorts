@@ -43,6 +43,8 @@ class PortRelay {
     // Group coordination members
     PortGroup* group_{nullptr};
     std::atomic<bool> groupReleased_{false};
+    // 启动时自动启动后端（首启一次性）
+    bool launchOnStart_ = false;
     public:
     std::atomic<pid_t> backendPid_{0};
     int stackSize_ = 256;  // KB
@@ -97,6 +99,9 @@ class PortRelay {
     void sendStartupPage(int fd);
     void monitorBackend();
 
+    // 启动后端、释放监听端口并等待就绪（simple/mixed+hold_port=false 共用）
+    void launchAndRelease();
+
     // simple 模式
     void listenLoop();
 
@@ -121,6 +126,7 @@ public:
     PortRelay(const PortConfig& cfg);
     // Group coordination methods
     void setGroup(PortGroup* g);
+    void setLaunchOnStart(bool v) { launchOnStart_ = v; }
     void forceReleasePort();
     void clearGroupLaunch();
 

@@ -64,6 +64,7 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
         if (auto* rt = entry->get("retry_seconds")) cfg.retrySeconds = (int)rt->as_num();
         if (auto* mr = entry->get("max_retry_seconds")) cfg.maxRetrySeconds = (int)mr->as_num();
         if (auto* r = entry->get("auto_restart")) cfg.autoRestart = r->as_bool();
+        if (auto* los = entry->get("launch_on_start")) cfg.launchOnStart = los->as_bool();
         if (auto* s = entry->get("stack_size")) cfg.stackSize = (int)s->as_num();
 
         // 混合模式字段

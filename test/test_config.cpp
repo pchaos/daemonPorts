@@ -390,4 +390,32 @@ TEST_CASE("parseConfig - control auth none") {
 
 // configsEqual tests
 
+TEST_CASE("parseConfig - launch_on_start 解析") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":3000", "command": "./a", "launch_on_start": true },
+            { "listen": ":4000", "command": "./b" },
+            { "listen": ":5000", "command": "./c", "launch_on_start": false }
+        ]
+    })");
+
+    REQUIRE(cfgs.size() == 3);
+    CHECK(cfgs[0].launchOnStart == true);
+    CHECK(cfgs[1].launchOnStart == false);  // 默认值
+    CHECK(cfgs[2].launchOnStart == false);
+}
+
+TEST_CASE("parseConfig - enabled=false 时 launch_on_start 端口被跳过") {
+    auto cfgs = parseConfig(R"({
+        "ports": [
+            { "listen": ":3000", "command": "./a", "enabled": false, "launch_on_start": true },
+            { "listen": ":4000", "command": "./b", "launch_on_start": true }
+        ]
+    })");
+
+    REQUIRE(cfgs.size() == 1);
+    CHECK(cfgs[0].listenAddr == ":4000");
+    CHECK(cfgs[0].launchOnStart == true);
+}
+
 
