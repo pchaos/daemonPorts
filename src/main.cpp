@@ -54,20 +54,12 @@ static std::string g_configPath;
 static std::vector<PortConfig> g_currentCfgs;
 static std::atomic<bool> g_reloadInProgress{false};
 
+// Signal flags — async-signal-safe, only set here
+static std::atomic<bool> g_shutdownRequested{false};
+
 static void handleSignal(int) {
     g_stop.store(true);
-    // Stop all groups first
-    {
-        std::lock_guard<std::mutex> lock(g_groupsMutex);
-        for (auto& g : g_groups) {
-            if (g) g->signalStop();
-        }
-    }
-    // Then stop any remaining relays (non‑grouped or already stopped)
-    {
-        std::lock_guard<std::mutex> lock(g_relaysMutex);
-        for (auto& r : g_relays) r->signalStop();
-    }
+    g_shutdownRequested.store(true);
 }
 
 #ifdef _WIN32
@@ -509,22 +501,34 @@ int main(int argc, char* argv[]) {
         std::cout << "systemd: READY=1" << std::endl;
     }
 
-    #ifndef _WIN32
-    pause();
-#else
+#ifndef _WIN32
+    while (!g_stop.load()) {
+        pause();  // wait for signal
+        if (g_shutdownRequested.exchange(false)) {
+            // Signal received — safe to take mutexes here
+            break;
+        }
+    }
+    #else
     // Windows: WaitForSingleObject on an event handle, or just sleep
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-#endif
+    #endif
 
     std::cout << "门卫程序退出" << std::endl;
     // Stop all groups before exiting (groups stop their relays)
-    for (auto& g : g_groups) {
-        if (g) g->stop();
+    {
+        std::lock_guard<std::mutex> lock(g_groupsMutex);
+        for (auto& g : g_groups) {
+            if (g) g->stop();
+        }
     }
     // Ensure any remaining relays are stopped (non‑grouped)
-    for (auto& r : g_relays) r->stop();
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto& r : g_relays) r->stop();
+    }
     if (monitorThread.joinable()) monitorThread.join();
     return 0;
 }
