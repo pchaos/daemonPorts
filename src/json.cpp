@@ -35,7 +35,9 @@ static double parse_num(const std::string& in, size_t& p) {
         p++; if (p < in.size() && (in[p]=='+'||in[p]=='-')) p++;
         while (p < in.size() && in[p] >= '0' && in[p] <= '9') p++;
     }
-    return std::stod(in.substr(start, p-start));
+    try {
+        return std::stod(in.substr(start, p-start));
+    } catch (...) { return 0.0; }
 }
 
 static JsonValue parse_val(const std::string& in, size_t& p);

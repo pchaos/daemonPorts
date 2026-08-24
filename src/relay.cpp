@@ -58,7 +58,10 @@ static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     auto c = addr.find(':');
     if (c == std::string::npos) return false;
     std::string host = addr.substr(0, c);
-    int port = std::stoi(addr.substr(c+1));
+    int port = 0;
+    try {
+        port = std::stoi(addr.substr(c+1));
+    } catch (...) { return false; }
     if (port <= 0 || port > 65535) return false;
 
     memset(&out, 0, sizeof(out));
@@ -302,7 +305,10 @@ void PortRelay::updateActivity(bool active) {
 int PortRelay::monitorPort() const {
     auto c = listenAddr_.find(':');
     if (c == std::string::npos) return -1;
-    int port = std::stoi(listenAddr_.substr(c+1));
+    int port = -1;
+    try {
+        port = std::stoi(listenAddr_.substr(c+1));
+    } catch (...) { return -1; }
     if (port <= 0 || port > 65535) return -1;
     return port;
 }

@@ -36,7 +36,10 @@ static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     auto pos = addr.find(':');
     if (pos == std::string::npos) return false;
     std::string host = addr.substr(0, pos);
-    int port = std::stoi(addr.substr(pos+1));
+    int port = 0;
+    try {
+        port = std::stoi(addr.substr(pos+1));
+    } catch (...) { return false; }
     if (port <= 0 || port > 65535) return false;
     std::memset(&out, 0, sizeof(out));
     out.sin_family = AF_INET;
@@ -88,21 +91,29 @@ void ControlServer::serverLoop() {
             if (stop_.load() || platform::last_error() == PLATFORM_EINVAL || platform::last_error() == EBADF || platform::last_error() == EAGAIN || platform::last_error() == EWOULDBLOCK) continue;
             continue;
         }
-        // Get client IP for rate limiting
-        char clientIp[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &cli.sin_addr, clientIp, sizeof(clientIp));
+        try {
+            // Get client IP for rate limiting
+            char clientIp[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &cli.sin_addr, clientIp, sizeof(clientIp));
 
-        // Per-IP sliding-window rate limiter
-        if (!rateLimiter_.allow(clientIp)) {
-            sendError(client, 429, "Too Many Requests");
-            platform::close_fd(client);
-            continue;
+            // Per-IP sliding-window rate limiter
+            if (!rateLimiter_.allow(clientIp)) {
+                sendError(client, 429, "Too Many Requests");
+                platform::close_fd(client);
+                continue;
+            }
+
+            // Set recv timeout so slow/idle clients don't hold the connection
+            platform::set_recv_timeout(client, 15);
+
+            handleRequest(client);
+        } catch (const std::exception& e) {
+            std::cerr << "[ControlServer] 异常: " << e.what() << std::endl;
+            sendError(client, 400, "Bad Request");
+        } catch (...) {
+            std::cerr << "[ControlServer] 未知异常" << std::endl;
+            sendError(client, 400, "Bad Request");
         }
-
-        // Set recv timeout so slow/idle clients don't hold the connection
-        platform::set_recv_timeout(client, 15);
-
-        handleRequest(client);
         platform::close_fd(client);
     }
     // cleanup
