@@ -215,6 +215,42 @@ jobs:
           path: build/macosx/${{ matrix.arch }}/*
 
   # ═══════════════════════════════════════════════════════════════════
+  # Android (arm64-v8a) ── NDK 交叉编译
+  # ═══════════════════════════════════════════════════════════════════
+  android-arm64:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate Android NDK
+        run: |
+          NDK=$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$NDK" ]; then
+            echo "::error::No Android NDK found under /usr/local/lib/android/sdk/ndk/"
+            exit 1
+          fi
+          echo "Found NDK: $NDK"
+          echo "ANDROID_NDK_HOME=$NDK" >> $GITHUB_ENV
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Configure & Build (release, android arm64-v8a)
+        run: |
+          xmake f -p android -a arm64-v8a -m release --ndk="$ANDROID_NDK_HOME" -y
+          xmake
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-android-arm64
+          path: build/android/arm64-v8a/*
+
+  # ═══════════════════════════════════════════════════════════════════
   # Debug 测试 (Linux amd64)
   # ═══════════════════════════════════════════════════════════════════
   test:
@@ -250,6 +286,7 @@ jobs:
       - windows-mingw
       - windows-msvc
       - macos
+      - android-arm64
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
