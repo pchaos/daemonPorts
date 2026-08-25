@@ -79,6 +79,16 @@ TEST_CASE("runCommand - shell 元字符不注入 (H3 回归)") {
     CHECK(rc == 0);
 }
 
+TEST_CASE("generateAuthToken - 32 位小写 hex") {
+    std::string tok = platform::generateAuthToken();
+    REQUIRE(tok.size() == 32);
+    for (char c : tok) {
+        bool hexDigit = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        CHECK(hexDigit);
+    }
+    CHECK(tok != platform::generateAuthToken());
+}
+
 // ── buildStartupResponse ──
 
 TEST_CASE("buildStartupResponse - 基本结构") {

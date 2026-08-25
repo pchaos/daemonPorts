@@ -1,5 +1,6 @@
 #include "relay_platform.h"
 #include <cstring>
+#include <bcrypt.h>
 
 namespace platform {
 
@@ -174,6 +175,21 @@ bool isProcessRunning(pid_t pid) {
     BOOL ok = GetExitCodeProcess(h, &exitCode);
     CloseHandle(h);
     return ok && exitCode == STILL_ACTIVE;
+}
+
+std::string generateAuthToken() {
+    unsigned char buf[16];  // 128 bits
+    NTSTATUS status = BCryptGenRandom(nullptr, buf, sizeof(buf),
+                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (status < 0) return "";
+    static const char* hexd = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(32);
+    for (unsigned char b : buf) {
+        hex += hexd[b >> 4];
+        hex += hexd[b & 0x0f];
+    }
+    return hex;
 }
 
 void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int) {

@@ -175,5 +175,10 @@ inline std::vector<std::string> parseCommandLine(const std::string& cmd) {
 // (no cmd.exe involvement). Returns the process exit code, or -1 on
 // launch failure.
 int runCommand(const std::string& command);
+
+// Generate a 128-bit random auth token as 32 lowercase hex chars.
+// Uses a CSPRNG: /dev/urandom on POSIX, BCryptGenRandom on Windows.
+// Returns an empty string on RNG failure.
+std::string generateAuthToken();
 } // namespace platform
 #endif

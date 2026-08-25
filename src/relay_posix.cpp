@@ -136,6 +136,31 @@ int runCommand(const std::string& command) {
     return -1;
 }
 
+static char hexNibble(unsigned char b) {
+    return b < 10 ? static_cast<char>('0' + b) : static_cast<char>('a' + b - 10);
+}
+
+std::string generateAuthToken() {
+    const int bytes = 16;  // 128 bits
+    unsigned char buf[16];
+    int fd = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return "";
+    size_t got = 0;
+    while (got < sizeof(buf)) {
+        ssize_t n = ::read(fd, buf + got, sizeof(buf) - got);
+        if (n <= 0) { ::close(fd); return ""; }
+        got += static_cast<size_t>(n);
+    }
+    ::close(fd);
+    std::string hex;
+    hex.reserve(32);
+    for (int i = 0; i < bytes; ++i) {
+        hex += hexNibble(buf[i] >> 4);
+        hex += hexNibble(buf[i] & 0x0f);
+    }
+    return hex;
+}
+
 void killProcess(pid_t pid) { ::kill(pid, SIGKILL); }
 void termProcess(pid_t pid) { ::kill(pid, SIGTERM); }
 

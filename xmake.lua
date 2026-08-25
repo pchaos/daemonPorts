@@ -25,7 +25,7 @@ target("gatekeeper")
     else
         add_files("src/relay_posix.cpp")
         add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
-        if is_plat("linux", "cross") then
+        if is_plat("linux", "android", "cross") then
             add_files("src/relay_linux.cpp")
         end
     end
@@ -47,7 +47,7 @@ target("gatekeeper")
 
     -- ── Windows (MinGW / MSVC) ──────────────────────────────
     if is_plat("windows", "mingw") then
-        add_syslinks("ws2_32")
+        add_syslinks("ws2_32", "bcrypt")
     end
 
     -- ── 编译器标志 ──────────────────────────────────────────
@@ -95,7 +95,7 @@ target("gatekeeper-systemd")
     else
         add_files("src/relay_posix.cpp")
         add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
-        if is_plat("linux", "cross") then
+        if is_plat("linux", "android", "cross") then
             add_files("src/relay_linux.cpp")
         end
     end
@@ -103,7 +103,7 @@ target("gatekeeper-systemd")
     add_includedirs("src")
 
     -- ── 始终启用 systemd（嵌入式 sd-daemon.h，无需链接 libsystemd）──
-    if not is_plat("windows", "mingw") then
+    if not is_plat("windows", "mingw", "android") then
         add_defines("HAVE_SYSTEMD")
     end
 
@@ -114,7 +114,7 @@ target("gatekeeper-systemd")
 
     -- ── Windows (MinGW / MSVC) ──────────────────────────────
     if is_plat("windows", "mingw") then
-        add_syslinks("ws2_32")
+        add_syslinks("ws2_32", "bcrypt")
     end
 
     -- ── 编译器标志 ──────────────────────────────────────────
@@ -159,7 +159,7 @@ target("test-gatekeeper")
         add_files("src/relay_win.cpp")
     else
         add_files("src/relay_posix.cpp")
-        if is_plat("linux") then
+        if is_plat("linux", "android") then
             add_files("src/relay_linux.cpp")
         end
     end
@@ -169,6 +169,11 @@ target("test-gatekeeper")
     -- ── POSIX 平台 ──────────────────────────────────────────
     if is_plat("linux", "macosx", "bsd") then
         add_syslinks("pthread")
+    end
+
+    -- ── Windows (MinGW / MSVC) ──────────────────────────────
+    if is_plat("windows", "mingw") then
+        add_syslinks("ws2_32", "bcrypt")
     end
 
     -- ── systemd 集成 ──────────────────────────────────────────
