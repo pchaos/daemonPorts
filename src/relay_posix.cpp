@@ -94,14 +94,46 @@ std::string last_error_str() {
 }
 
 // ── Process / thread ────────────────────────────────────────────────
+// Executes the command via execvp() with an argv array — deliberately NO
+// shell is involved, so config-supplied metacharacters (`;`, `|`, `$()`,
+// backticks, redirections) are passed literally and cannot inject commands.
 pid_t launchProcess(const std::string& command) {
+    std::vector<std::string> args = parseCommandLine(command);
+    if (args.empty()) return -1;
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", command.c_str(), (char*)NULL);
+        execvp(argv[0], argv.data());
         _exit(127);
     }
     return pid;
+}
+
+// Blocking, shell-free execution (same security model as launchProcess).
+// Returns the child's exit code (0 on success), or -1 if launch failed.
+int runCommand(const std::string& command) {
+    std::vector<std::string> args = parseCommandLine(command);
+    if (args.empty()) return -1;
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
 }
 
 void killProcess(pid_t pid) { ::kill(pid, SIGKILL); }

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <vector>
 
 // ── Platform-specific system headers ──────────────────────────────────
 // relay.cpp includes relay_platform.h (via relay.h) and gets everything
@@ -118,5 +119,61 @@ bool threadValid(const PlatformThread& thread);
 // ── Procfs helpers (Linux only; other platforms return empty) ────────
 pid_t findPidUsingPort(uint16_t port);
 std::string findProcessUsingPort(uint16_t port);
+
+// Parse a command string into an argument array (POSIX sh subset:
+// whitespace splitting, single/double quotes, backslash escapes).
+// No shell metacharacter expansion is performed — this is deliberate:
+// since rev 2777c79.. the process launcher no longer goes through a
+// shell, so `;`, `|`, `$()` etc. are passed literally as arguments
+// instead of being interpreted (H1/H3 fix).
+// Returns an empty vector on parse error (unterminated quote).
+inline std::vector<std::string> parseCommandLine(const std::string& cmd) {
+    std::vector<std::string> args;
+    size_t i = 0;
+    const size_t n = cmd.size();
+    while (i < n) {
+        // Skip whitespace
+        while (i < n && (cmd[i] == ' ' || cmd[i] == '\t' || cmd[i] == '\n' || cmd[i] == '\r')) ++i;
+        if (i >= n) break;
+        std::string arg;
+        bool closed = false;  // true when the argument ended normally
+        while (i < n) {
+            char c = cmd[i];
+            if (c == '\'' || c == '"') {
+                char quote = c;
+                ++i;
+                bool term = false;
+                while (i < n) {
+                    if (quote == '"' && cmd[i] == '\\' && i + 1 < n) {
+                        // Inside double quotes: backslash escapes only quote and backslash.
+                        char nx = cmd[i + 1];
+                        if (nx == '"' || nx == '\\') { arg += nx; i += 2; continue; }
+                        arg += cmd[i]; ++i; continue;
+                    }
+                    if (cmd[i] == quote) { term = true; ++i; break; }
+                    arg += cmd[i]; ++i;
+                }
+                if (!term) return {};  // unterminated quote
+                continue;
+            }
+            if (c == '\\' && i + 1 < n) {
+                // Outside quotes: backslash escapes the next character
+                arg += cmd[i + 1]; i += 2; continue;
+            }
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') break;
+            arg += c; ++i;
+        }
+        args.push_back(arg);
+        closed = (i < n) || !args.empty();
+        (void)closed;
+    }
+    return args;
+}
+
+// Blocking execution of a command WITHOUT a shell (H3 fix).
+// POSIX builds fork+execvp; Windows builds CreateProcessA directly
+// (no cmd.exe involvement). Returns the process exit code, or -1 on
+// launch failure.
+int runCommand(const std::string& command);
 } // namespace platform
 #endif

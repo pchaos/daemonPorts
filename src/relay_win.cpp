@@ -135,6 +135,22 @@ void killProcess(pid_t pid) {
 }
 void termProcess(pid_t pid) { killProcess(pid); }
 
+// Blocking, shell-free execution (CreateProcessA does not invoke cmd.exe).
+int runCommand(const std::string& command) {
+    STARTUPINFOA si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(si);
+    if (!CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+        return -1;
+    CloseHandle(pi.hThread);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    return static_cast<int>(exitCode);
+}
+
 bool isChildAlive(pid_t pid) {
     HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
     if (!h) return false;

@@ -1,8 +1,85 @@
 #include "doctest.h"
 #include "config.h"
 #include "relay.h"
+#include "relay_platform.h"
 
 #include <ctime>
+
+// ── parseCommandLine ──
+
+TEST_CASE("parseCommandLine - 空白分割") {
+    auto args = platform::parseCommandLine("./app --port 3000");
+    REQUIRE(args.size() == 3);
+    CHECK(args[0] == "./app");
+    CHECK(args[1] == "--port");
+    CHECK(args[2] == "3000");
+}
+
+TEST_CASE("parseCommandLine - 双引号参数") {
+    auto args = platform::parseCommandLine("prog \"two words\" tail");
+    REQUIRE(args.size() == 3);
+    CHECK(args[0] == "prog");
+    CHECK(args[1] == "two words");
+    CHECK(args[2] == "tail");
+}
+
+TEST_CASE("parseCommandLine - 单引号参数") {
+    auto args = platform::parseCommandLine("prog 'a b' c");
+    REQUIRE(args.size() == 3);
+    CHECK(args[0] == "prog");
+    CHECK(args[1] == "a b");
+    CHECK(args[2] == "c");
+}
+
+TEST_CASE("parseCommandLine - 反斜杠转义") {
+    auto args = platform::parseCommandLine("prog a\\ b");
+    REQUIRE(args.size() == 2);
+    CHECK(args[0] == "prog");
+    CHECK(args[1] == "a b");
+}
+
+TEST_CASE("parseCommandLine - 未闭合引号返回空") {
+    CHECK(platform::parseCommandLine("prog \"unclosed").empty());
+    CHECK(platform::parseCommandLine("'unclosed").empty());
+}
+
+TEST_CASE("parseCommandLine - 空字符串与纯空白") {
+    CHECK(platform::parseCommandLine("").empty());
+    CHECK(platform::parseCommandLine("   \t\n").empty());
+}
+
+TEST_CASE("parseCommandLine - shell 元字符不被解释 (H1 回归)") {
+    // 元字符应作为普通参数保留，整个命令仍是一个可执行 + 参数列表
+    auto args = platform::parseCommandLine("./app \"--port=3000; rm -rf /\"");
+    REQUIRE(args.size() == 2);
+    CHECK(args[1] == "--port=3000; rm -rf /");
+
+    auto pipe = platform::parseCommandLine("cmd | grep x");
+    REQUIRE(pipe.size() == 4);
+    CHECK(pipe[2] == "grep");
+    CHECK(pipe[3] == "x");
+}
+
+TEST_CASE("runCommand - 正常命令返回退出码 (H3 回归)") {
+    int rc = platform::runCommand("true");
+    CHECK(rc == 0);
+    rc = platform::runCommand("false");
+    CHECK(rc == 1);
+    rc = platform::runCommand("sh -c 'exit 7'");
+    CHECK(rc == 7);
+}
+
+TEST_CASE("runCommand - 空命令失败") {
+    CHECK(platform::runCommand("") == -1);
+}
+
+TEST_CASE("runCommand - shell 元字符不注入 (H3 回归)") {
+    // 若经 shell 解释，echo x && exit 3 会返回 3；无 shell 时全部作为 echo 参数
+    int rc = platform::runCommand("echo x \"&& exit 3\"");
+    CHECK(rc == 0);
+}
+
+// ── buildStartupResponse ──
 
 TEST_CASE("buildStartupResponse - 基本结构") {
     PortConfig cfg;

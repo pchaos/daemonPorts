@@ -1046,7 +1046,7 @@ void PortRelay::gracefulStop() {
     std::cout << "  [" << name_ << "] 正在关闭后端 (PID=" << backendPid_ << ")" << std::endl;
     if (!stopCommand_.empty()) {
         std::cout << "  [" << name_ << "] 执行关闭命令: " << stopCommand_ << std::endl;
-        system(stopCommand_.c_str());
+        platform::runCommand(stopCommand_);
         for (int i = 0; i < 30; ++i) {
             if (backendPid_ == 0) return; // monitorBackend may have cleared it
 if (!platform::isChildAlive(backendPid_)) {
