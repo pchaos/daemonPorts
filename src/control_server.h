@@ -4,7 +4,7 @@
 #include "config.h"
 #include "relay_platform.h"
 #include <string>
-#include <ctime>
+#include <chrono>
 #include <map>
 #include <atomic>
 #include <mutex>
@@ -21,9 +21,10 @@ class ControlServer {
         int maxConnections = 20;
         long long windowMs = 60000;
         long long nowMs() {
-            struct timespec ts;
-            ::clock_gettime(CLOCK_MONOTONIC, &ts);
-            return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+            auto now = std::chrono::steady_clock::now();
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now.time_since_epoch())
+                .count();
         }
         bool allow(const std::string& ip) {
             std::lock_guard<std::mutex> lock(mtx_);

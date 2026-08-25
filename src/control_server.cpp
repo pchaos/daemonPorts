@@ -15,7 +15,8 @@ struct ReloadSummary {
 #include <map>
 #include <cctype>
 #include <cstring>
-#include <arpa/inet.h>
+// arpa/inet.h is already pulled in transitively via control_server.h →
+// relay_platform.h (POSIX: <arpa/inet.h>, Windows: <ws2tcpip.h>).
 
 extern ReloadSummary reloadFromFile();
 extern ReloadSummary reloadFromJson(const std::string& json);

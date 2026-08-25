@@ -189,10 +189,4 @@ void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int s
 void joinThread(PlatformThread& thread) { pthread_join(thread, nullptr); }
 bool threadValid(const PlatformThread& thread) { return thread != 0; }
 
-// ── Procfs stubs for non-Linux POSIX (macOS, BSD) ──
-#ifndef __linux__
-pid_t findPidUsingPort(uint16_t) { return 0; }
-std::string findProcessUsingPort(uint16_t) { return ""; }
-#endif
-
 } // namespace platform
