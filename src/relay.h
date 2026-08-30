@@ -146,6 +146,7 @@ public:
     int idleMinutes() const { return idleMinutes_; }
 
     const std::string& name() const { return name_; }
+    const std::string& listenAddr() const { return listenAddr_; }
 
     // 查询端口在最近 minutes 分钟内是否有过活跃连接
     bool hasRecentActivity(int minutes) const;

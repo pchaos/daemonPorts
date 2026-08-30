@@ -297,7 +297,7 @@ ReloadSummary reloadConfig(const std::vector<PortConfig>& newCfgs) {
     if (!toRemove.empty()) {
         std::lock_guard<std::mutex> lock(g_relaysMutex);
         for (auto it = g_relays.begin(); it != g_relays.end(); ) {
-            if (std::find(toRemove.begin(), toRemove.end(), (*it)->name()) != toRemove.end()) {
+            if (std::find(toRemove.begin(), toRemove.end(), (*it)->listenAddr()) != toRemove.end()) {
                 (*it)->setPendingRemoval();
                 { std::lock_guard<std::mutex> plock(g_pendingMutex); g_pendingRemoval.push_back(std::move(*it)); }
                 it = g_relays.erase(it);
@@ -308,7 +308,7 @@ ReloadSummary reloadConfig(const std::vector<PortConfig>& newCfgs) {
     if (!toModifyOld.empty()) {
         std::lock_guard<std::mutex> lock(g_relaysMutex);
         for (auto it = g_relays.begin(); it != g_relays.end(); ) {
-            if (std::find(toModifyOld.begin(), toModifyOld.end(), (*it)->name()) != toModifyOld.end()) {
+            if (std::find(toModifyOld.begin(), toModifyOld.end(), (*it)->listenAddr()) != toModifyOld.end()) {
                 (*it)->setPendingRemoval();
                 { std::lock_guard<std::mutex> plock(g_pendingMutex); g_pendingRemoval.push_back(std::move(*it)); }
                 it = g_relays.erase(it);

@@ -438,7 +438,13 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 |------|------|--------|------|
 | `control.listen` | string | `""` | 控制端口监听地址，如 `":19999"`。为空时不启动控制端口 |
 | `control.auth.type` | string | `"none"` | 认证方式：`"none"`（无认证）或 `"token"`（Token 认证） |
-| `control.auth.token` | string | `""` | Token 值，`auth.type` 为 `"token"` 时必填 |
+| `ports[].listen` | string | **必填** | 监听地址，如 `":3000"` |
+| `ports[].command` | string | **必填** | 启动命令。**注意**：gatekeeper 使用 `execvp` 直接执行，**不支持** `VAR=val` 环境变量前缀。需改用 `/usr/bin/env VAR=val ...` 写法，如 `/usr/bin/env DATA_DIR=/data node app.js` |
+| `ports[].stop_command` | string | `""` | 停止命令，同 `command`，需用 `/usr/bin/env` 包装环境变量 |
+| `ports[].delay` | integer | `3000` | 端口释放后等待后端就绪的毫秒数，建议设为后端冷启动耗时的 1.5-2 倍 |
+| `ports[].idle_minutes` | integer | `20` | 空闲超时分钟数，超时后自动停止后端 |
+| `ports[].auto_restart` | boolean | `true` | 后端退出后是否自动重启 |
+| `ports[].enabled` | boolean | `true` | 是否启用该端口 |
 
 ### CLI 快捷方式
 
@@ -453,6 +459,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
+| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.5"}` |
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |
 | `POST /config` | POST | 接收请求体中的新配置 JSON 并应用 |
@@ -483,8 +490,14 @@ curl -X POST http://127.0.0.1:19999/reload \
 ### 示例
 
 ```bash
+# 以下示例假设 control.auth.type = "none"（无认证）
+# 若 auth.type = "token"，每条请求需加: -H "X-Auth-Token: <token>"
+
 # 健康检查
 curl http://127.0.0.1:19999/health
+
+# 查询版本
+curl http://127.0.0.1:19999/version
 
 # 触发配置重新加载
 curl -X POST http://127.0.0.1:19999/reload
