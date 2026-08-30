@@ -65,6 +65,7 @@ private:
     // Route handlers
     void handleReload(int fd, const HttpRequest& req);
     void handleConfig(int fd, const HttpRequest& req);
+    void handleVersion(int fd, const HttpRequest& req);
     void handleHealth(int fd, const HttpRequest& req);
     void handleStatus(int fd, const HttpRequest& req);
     // Auth

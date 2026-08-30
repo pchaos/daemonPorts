@@ -18,6 +18,12 @@ struct ReloadSummary {
 // arpa/inet.h is already pulled in transitively via control_server.h →
 // relay_platform.h (POSIX: <arpa/inet.h>, Windows: <ws2tcpip.h>).
 
+// GATEKEEPER_VERSION is injected by xmake for the gatekeeper targets; the
+// test target compiles control_server.cpp without it, so provide a fallback.
+#ifndef GATEKEEPER_VERSION
+#define GATEKEEPER_VERSION "unknown"
+#endif
+
 extern ReloadSummary reloadFromFile();
 extern ReloadSummary reloadFromJson(const std::string& json);
 extern std::mutex g_relaysMutex;
@@ -188,6 +194,8 @@ void ControlServer::handleRequest(int clientFd) {
     // route dispatch
     if (req.method == "GET" && req.path == "/health") {
         handleHealth(clientFd, req);
+    } else if (req.method == "GET" && req.path == "/version") {
+        handleVersion(clientFd, req);
     } else if (req.method == "GET" && req.path == "/status") {
         handleStatus(clientFd, req);
     } else if (req.method == "POST" && req.path == "/reload") {
@@ -211,6 +219,10 @@ void ControlServer::sendResponse(int fd, int status, const std::string& contentT
     platform::write_fd(fd, resp.data(), resp.size());
 }
 
+
+void ControlServer::handleVersion(int fd, const HttpRequest&) {
+    sendResponse(fd, 200, "application/json", "{\"version\":\"" GATEKEEPER_VERSION "\"}");
+}
 void ControlServer::sendError(int fd, int status, const std::string& message) {
     std::string body = "{\"error\":\"" + message + "\"}";
     sendResponse(fd, status, "application/json", body);
