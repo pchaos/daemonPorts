@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 // ── Platform-specific system headers ──────────────────────────────────
 // relay.cpp includes relay_platform.h (via relay.h) and gets everything
@@ -176,6 +177,19 @@ inline std::vector<std::string> parseCommandLine(const std::string& cmd) {
 // launch failure.
 int runCommand(const std::string& command);
 
+// Execute a shell command synchronously, capturing combined stdout+stderr.
+// Uses /bin/sh -c (POSIX) or cmd.exe /c (Windows). Returns exit code, or
+// -1 on launch failure. Output is appended to `output`, truncated at
+// maxOutputBytes. Runs for at most `timeoutMs` ms; killed on timeout.
+int runShellCommand(const std::string& command, int timeoutMs,
+                     int maxOutputBytes, std::string& output);
+
+// Stream a shell command's combined stdout+stderr to a socket descriptor
+// using HTTP chunked transfer-encoding. Returns the exit code (or -1 on
+// launch failure / -2 on timeout). Each line is flushed immediately.
+// `stop` is checked between chunks to allow graceful shutdown.
+int runShellStream(const std::string& command, PlatformHandle socket,
+                   int timeoutMs, const std::atomic<bool>& stop);
 // Generate a 128-bit random auth token as 32 lowercase hex chars.
 // Uses a CSPRNG: /dev/urandom on POSIX, BCryptGenRandom on Windows.
 // Returns an empty string on RNG failure.

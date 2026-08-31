@@ -2,12 +2,16 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <chrono>
 #include <sstream>
 #include <dirent.h>
 #include <algorithm>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <poll.h>
+#include <cerrno>
 
 namespace platform {
 
@@ -134,6 +138,142 @@ int runCommand(const std::string& command) {
     if (waitpid(pid, &status, 0) < 0) return -1;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
+}
+
+// ── Shell command execution (for /run control endpoint) ───────────────
+// These intentionally use /bin/sh -c to support pipes, redirects, &&.
+// Unlike runCommand/launchProcess, the caller is authenticated (token+PIN),
+// so shell power is the desired capability, not an injection vector.
+
+static pid_t g_streamChildPid = 0;
+static PlatformHandle g_streamPipeRd = -1;
+static void streamTimeoutHandler(int) {
+    if (g_streamChildPid > 0) { ::kill(g_streamChildPid, SIGKILL); g_streamChildPid = 0; }
+    if (g_streamPipeRd >= 0) { ::close(g_streamPipeRd); g_streamPipeRd = -1; }
+}
+
+int runShellCommand(const std::string& command, int timeoutMs,
+                     int maxOutputBytes, std::string& output) {
+    output.clear();
+    int pipefd[2] = {-1, -1};
+    if (::pipe(pipefd) < 0) return -1;
+    pid_t pid = ::fork();
+    if (pid < 0) { ::close(pipefd[0]); ::close(pipefd[1]); return -1; }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
+        ::execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    ::close(pipefd[1]);
+    auto deadline = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(timeoutMs);
+    char buf[4096];
+    int exitCode = -1;
+    bool timedOut = false;
+    while (output.size() < (size_t)maxOutputBytes) {
+        auto now = std::chrono::steady_clock::now();
+        int remaining = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                            deadline - now).count();
+        if (remaining <= 0) { timedOut = true; break; }
+        struct pollfd pfd = { pipefd[0], POLLIN, 0 };
+        int pr = ::poll(&pfd, 1, remaining);
+        if (pr <= 0) { timedOut = true; break; }  // timeout or poll error
+        ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+        if (n > 0) {
+            int room = maxOutputBytes - (int)output.size();
+            output.append(buf, static_cast<size_t>(n > room ? room : n));
+            if ((int)output.size() >= maxOutputBytes) break;
+        } else break;  // EOF
+    }
+    if (timedOut) {
+        ::kill(pid, SIGKILL);
+        ::waitpid(pid, nullptr, 0);
+        exitCode = -2;  // timeout
+    } else {
+        int status = 0;
+        if (::waitpid(pid, &status, 0) >= 0 && WIFEXITED(status))
+            exitCode = WEXITSTATUS(status);
+    }
+    ::close(pipefd[0]);
+    return exitCode;
+}
+
+int runShellStream(const std::string& command, PlatformHandle socket,
+                   int timeoutMs, const std::atomic<bool>& stop) {
+    int pipefd[2] = {-1, -1};
+    if (::pipe(pipefd) < 0) return -1;
+    pid_t pid = ::fork();
+    if (pid < 0) { ::close(pipefd[0]); ::close(pipefd[1]); return -1; }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
+        ::execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    ::close(pipefd[1]);
+    g_streamChildPid = pid;
+    g_streamPipeRd = pipefd[0];
+    auto oldAlarm = ::signal(SIGALRM, streamTimeoutHandler);
+    ::alarm(std::max(1, timeoutMs / 1000));
+    int exitCode = -2;  // assume timeout
+    char buf[4096];
+    while (!stop.load()) {
+        ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+        if (n > 0) {
+            std::string chunk(buf, static_cast<size_t>(n));
+            std::string hexLen;
+            {  // chunk size in hex
+                size_t len = chunk.size();
+                const char* hexc = "0123456789abcdef";
+                if (len == 0) hexLen = "0";
+                for (size_t i = 0, tmp = len;; ) { hexLen += hexc[tmp & 0xf]; if (!(tmp >>= 4)) break; }
+                std::reverse(hexLen.begin(), hexLen.end());
+            }
+            std::string frame = hexLen + "\r\n" + chunk + "\r\n";
+            if (platform::write_fd(socket, frame.data(), frame.size()) <= 0) break;
+        } else if (n == 0) {
+            exitCode = 0;  // EOF — child exited; will be refined by waitpid
+            break;
+        } else {
+            if (errno == EINTR) continue;
+            break;
+        }
+    }
+    int status = 0;
+    if (::waitpid(pid, &status, WNOHANG) > 0) {
+        if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
+        else exitCode = -1;
+    } else {
+        // EOF reached but the child (e.g. `sh -c` reaping its own
+        // subshell) hasn't been reaped yet. Give it a short grace
+        // window before killing, so the true exit code is preserved.
+        bool reaped = false;
+        for (int i = 0; i < 20 && !stop.load(); ++i) {
+            struct timespec ts = {0, 50 * 1000 * 1000};  // 50ms
+            ::nanosleep(&ts, nullptr);
+            if (::waitpid(pid, &status, WNOHANG) > 0) { reaped = true; break; }
+        }
+        if (reaped) {
+            if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
+            else exitCode = -1;
+        } else if (exitCode == 0) {
+            // still running after grace window — force kill
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+            exitCode = -1;
+        }
+    }
+    ::alarm(0);
+    ::signal(SIGALRM, oldAlarm);
+    ::close(pipefd[0]);
+    g_streamChildPid = 0;
+    g_streamPipeRd = -1;
+    return exitCode;
 }
 
 static char hexNibble(unsigned char b) {

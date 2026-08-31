@@ -4,6 +4,7 @@
 #include <algorithm>
 #include "relay.h"
 #include <vector>
+#include "json.h"
 
 struct ReloadSummary {
     std::vector<std::string> added;
@@ -109,25 +110,26 @@ void ControlServer::serverLoop() {
                 platform::close_fd(client);
                 continue;
             }
-
             // Set recv timeout so slow/idle clients don't hold the connection
             platform::set_recv_timeout(client, 15);
 
-            handleRequest(client);
+            bool closeClient = handleRequest(client);
+            if (closeClient) platform::close_fd(client);
+            else client = -1;  // ownership handed to streaming thread
         } catch (const std::exception& e) {
             std::cerr << "[ControlServer] 异常: " << e.what() << std::endl;
             sendError(client, 400, "Bad Request");
+            if (client >= 0) platform::close_fd(client);
         } catch (...) {
             std::cerr << "[ControlServer] 未知异常" << std::endl;
             sendError(client, 400, "Bad Request");
+            if (client >= 0) platform::close_fd(client);
         }
-        platform::close_fd(client);
     }
     // cleanup
     int lfd = listenFd_; listenFd_ = -1;
     if (lfd >= 0) platform::close_fd(lfd);
 }
-
 bool ControlServer::parseHttpRequest(int fd, HttpRequest& req) {
     // read up to 8KB
     char buf[4096];
@@ -181,29 +183,34 @@ bool ControlServer::checkAuth(const HttpRequest& req) {
     return it->second == config_.auth.token;
 }
 
-void ControlServer::handleRequest(int clientFd) {
+bool ControlServer::handleRequest(int clientFd) {
     HttpRequest req;
     if (!parseHttpRequest(clientFd, req)) {
         sendError(clientFd, 400, "Bad Request");
-        return;
+        return true;
     }
     if (!checkAuth(req)) {
         sendError(clientFd, 401, "Unauthorized");
-        return;
+        return true;
     }
     // route dispatch
     if (req.method == "GET" && req.path == "/health") {
         handleHealth(clientFd, req);
+        return true;
     } else if (req.method == "GET" && req.path == "/version") {
         handleVersion(clientFd, req);
+        return true;
     } else if (req.method == "GET" && req.path == "/status") {
         handleStatus(clientFd, req);
+        return true;
     } else if (req.method == "POST" && req.path == "/reload") {
         handleReload(clientFd, req);
-    } else if (req.method == "POST" && req.path == "/config") {
-        handleConfig(clientFd, req);
+        return true;
+    } else if (req.method == "POST" && req.path == "/run") {
+        return handleRun(clientFd, req);
     } else {
         sendError(clientFd, 404, "Not Found");
+        return true;
     }
 }
 
@@ -265,4 +272,162 @@ void ControlServer::handleConfig(int fd, const HttpRequest& req) {
     } else {
         sendError(fd, 400, "Invalid config");
     }
+}
+
+
+// ── Command execution: POST /run ───────────────────────────────────────
+// Body: {"name":"preset-name"}           // whitelist hit (token only)
+//    or {"command":"...","pin":"..."}    // ad-hoc (token + PIN second factor)
+//    or {"name":"preset-name","stream":true}  // streaming output
+// Sync response: {"exit_code":N,"stdout":"...","truncated":bool}
+// Stream response: HTTP chunked text/plain, [exit=N] terminator
+
+static const int kRunSyncTimeoutMs   = 10000;  // 10s hard ceiling
+static const int kRunStreamTimeoutMs = 30000;  // 30s for tail -f style
+static const int kRunMaxOutput       = 65536;  // 64KB cap for sync capture
+
+std::string ControlServer::jsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else out += c;
+        }
+    }
+    return out;
+}
+
+bool ControlServer::verifyPin(const std::string& pin) {
+    // Constant-time compare to avoid timing side-channels
+    const std::string& expected = config_.pin;
+    if (expected.empty()) return false; // PIN not configured → ad-hoc disabled
+    if (pin.empty()) return false;
+    size_t n = std::max(pin.size(), expected.size());
+    volatile bool ok = true;
+    volatile char diff = 0;
+    for (size_t i = 0; i < n; i++) {
+        char a = i < pin.size() ? pin[i] : 0;
+        char b = i < expected.size() ? expected[i] : 0;
+        diff |= static_cast<char>(a ^ b);
+    }
+    ok = (diff == 0) && (pin.size() == expected.size());
+    return ok;
+}
+
+ControlServer::RunResolution ControlServer::resolveRun(const HttpRequest& req) {
+    RunResolution r;
+    JsonValue body = parse_json(req.body);
+    if (!body.is_obj()) {
+        r.httpStatus = 400; r.errMsg = "invalid JSON body";
+        return r;
+    }
+    std::string name = body.get("name") ? body.get("name")->as_str() : "";
+    std::string cmd  = body.get("command") ? body.get("command")->as_str() : "";
+    bool wantStream = body.get("stream") ? body.get("stream")->as_bool() : false;
+
+    if (!name.empty()) {
+        // Whitelist lookup by name
+        for (auto& c : config_.commands) {
+            if (c.name == name) {
+                r.command = c.command;
+                r.isPreset = true;
+                // Presets may opt into streaming; ad-hoc PIN path cannot be a preset
+                if (wantStream) r.command = "\x01STREAM\x01" + c.command;
+                return r;
+            }
+        }
+        r.httpStatus = 404; r.errMsg = "unknown command name: " + name;
+        return r;
+    }
+    if (cmd.empty()) {
+        r.httpStatus = 400; r.errMsg = "missing 'name' or 'command'";
+        return r;
+    }
+    // Ad-hoc path: requires PIN
+    std::string pin = body.get("pin") ? body.get("pin")->as_str() : "";
+    if (!verifyPin(pin)) {
+        r.httpStatus = 401; r.errMsg = "PIN required or incorrect";
+        return r;
+    }
+    r.command = wantStream ? ("\x01STREAM\x01" + cmd) : cmd;
+    return r;
+}
+
+bool ControlServer::handleRun(int fd, const HttpRequest& req) {
+    RunResolution r = resolveRun(req);
+    if (r.httpStatus != 0) {
+        sendError(fd, r.httpStatus, r.errMsg);
+        return true;  // caller closes fd
+    }
+    std::string cmd = r.command;
+    bool wantStream = false;
+    if (cmd.size() > 8 && cmd.compare(0, 8, "\x01STREAM\x01") == 0) {
+        wantStream = true;
+        cmd.erase(0, 8);
+    }
+    std::cout << "[ControlServer] /run " << (wantStream ? "stream" : "sync")
+              << " " << (r.isPreset ? "preset" : "adhoc")
+              << " exec: " << cmd << std::endl;
+    if (wantStream) return !runStream(fd, cmd);  // runStream=true → thread owns fd
+    runSync(fd, cmd);
+    return true;  // caller closes fd
+}
+
+void ControlServer::runSync(int fd, const std::string& command) {
+    std::string output;
+    int exitCode = platform::runShellCommand(command, kRunSyncTimeoutMs, kRunMaxOutput, output);
+    bool truncated = (int)output.size() >= kRunMaxOutput;
+    std::string body = "{\"exit_code\":" + std::to_string(exitCode)
+                      + ",\"stdout\":\"" + jsonEscape(output) + "\""
+                      + ",\"truncated\":" + (truncated ? "true" : "false")
+                      + "}";
+    sendResponse(fd, 200, "application/json", body);
+}
+
+bool ControlServer::runStream(int fd, const std::string& command) {
+    // Send chunked-transfer-encoding response header
+    std::string header = "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/plain; charset=utf-8\r\n"
+                         "Transfer-Encoding: chunked\r\n"
+                         "Connection: close\r\n"
+                         "\r\n";
+    if (platform::write_fd(fd, header.data(), header.size()) <= 0)
+        return false;  // connection dead; caller closes fd
+
+    // Run the streaming shell command on a per-request thread.
+    // The thread owns the fd from here on and closes it when done.
+    struct StreamArg { ControlServer* self; int fd; std::string command; };
+    StreamArg* arg = new StreamArg{this, fd, command};
+    PlatformThread th;
+    platform::createThread(th, [](void* a) -> void* {
+        StreamArg* sa = static_cast<StreamArg*>(a);
+        int ec = platform::runShellStream(sa->command, sa->fd, kRunStreamTimeoutMs, sa->self->stop_);
+        // Terminator chunk: [exit=N] or [timeout]
+        std::string term = (ec == -2) ? "[timeout]\r\n" : ("[exit=" + std::to_string(ec) + "]\r\n");
+        std::string lenHex;
+        size_t L = term.size();
+        const char* hexc = "0123456789abcdef";
+        for (size_t i = L;;) { lenHex += hexc[i & 0xf]; if (!(i >>= 4)) break; }
+        std::reverse(lenHex.begin(), lenHex.end());
+        std::string frame = lenHex + "\r\n" + term + "\r\n0\r\n\r\n";
+        platform::write_fd(sa->fd, frame.data(), frame.size());
+        platform::close_fd(sa->fd);
+        delete sa;
+        return nullptr;
+    }, arg, 512);
+    std::lock_guard<std::mutex> lk(streamThreadsMtx_);
+    streamThreads_.push_back(th);
+    return true;  // thread owns the fd
 }

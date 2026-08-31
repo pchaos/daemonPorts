@@ -63,20 +63,23 @@ std::vector<PortConfig> parseConfig(const std::string& json);
 
 // 从文件加载并解析配置
 std::vector<PortConfig> loadConfig(const std::string& path);
-
 // Control configuration structs
+struct CommandConfig {
+    std::string name;
+    std::string command;
+};
 struct ControlAuth {
     std::string type = "token"; // "none" | "token" (default: token for security)
     std::string token;
 };
-
 struct ControlConfig {
     std::string listen;                // e.g. ":19999", empty = disabled
     ControlAuth auth;
+    std::string pin;                  // PIN for ad-hoc command execution; empty = disabled
     int maxConnections = 20;           // rate limit: max connections per window
     int rateLimitSeconds = 60;         // rate limit: window size in seconds
+    std::vector<CommandConfig> commands; // whitelisted named command presets
 };
-
 extern ControlConfig g_controlConfig;
 
 #endif // GATEKEEPER_CONFIG_H

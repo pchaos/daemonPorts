@@ -8,12 +8,21 @@
 #include <map>
 #include <atomic>
 #include <mutex>
+#include <vector>
 #include <iostream>
 
 class ControlServer {
     ControlConfig config_;
     std::atomic<bool> stop_{false};
     PlatformThread thread_{};
+    struct PinCooldown {
+        std::mutex mtx;
+        std::map<std::string, long long> lockedUntil; // epoch-ms when cooldown expires, per IP
+    };
+    PinCooldown pinCooldown_;
+    // Track streaming threads so they stop on shutdown
+    std::mutex streamThreadsMtx_;
+    std::vector<PlatformThread> streamThreads_;
     int listenFd_{-1};
     struct RateLimiter {
         std::map<std::string, std::vector<long long>> window;
@@ -52,9 +61,11 @@ public:
     void start();
     void stop();
     bool isEnabled() const { return !config_.listen.empty(); }
+    // For test access
+    bool verifyPin(const std::string& pin);
+
 private:
     void serverLoop();
-    void handleRequest(int clientFd);
     struct HttpRequest {
         std::string method;
         std::string path;
@@ -63,14 +74,28 @@ private:
     };
     bool parseHttpRequest(int fd, HttpRequest& req);
     // Route handlers
+    // Returns true if the caller (server loop) should close the client fd;
+    // false when the fd ownership was handed to a streaming thread.
+    bool handleRequest(int clientFd);
     void handleReload(int fd, const HttpRequest& req);
     void handleConfig(int fd, const HttpRequest& req);
     void handleVersion(int fd, const HttpRequest& req);
     void handleHealth(int fd, const HttpRequest& req);
     void handleStatus(int fd, const HttpRequest& req);
+    // Returns true when the caller (handleRequest) should close the fd;
+    // false when the streaming thread owns the fd and closes it.
+    bool handleRun(int fd, const HttpRequest& req);
     // Auth
     bool checkAuth(const HttpRequest& req);
-    // Response helpers
+    // Command execution (sync capture + chunked streaming)
+    void runSync(int fd, const std::string& command);
+    // Returns true when the streaming thread owns the fd (thread closes it);
+    // false when the caller should close the fd.
+    bool runStream(int fd, const std::string& command);
+    // Resolve a /run request body into the command to execute (or an error)
+    struct RunResolution { std::string command; int httpStatus = 0; std::string errMsg; bool isPreset = false; };
+    RunResolution resolveRun(const HttpRequest& req);
+    static std::string jsonEscape(const std::string& s);
     void sendResponse(int fd, int status, const std::string& contentType, const std::string& body);
     void sendError(int fd, int status, const std::string& message);
 };

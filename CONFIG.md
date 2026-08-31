@@ -417,16 +417,19 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 
 ### 配置方式
 
-在 config.json 顶层添加 `control` 对象：
-
 ```json
 {
   "control": {
-    "listen": ":19999",
+    "listen": ":29999",
     "auth": {
       "type": "token",
       "token": "my-secret-token"
-    }
+    },
+    "pin": "123456",
+    "commands": [
+      { "name": "disk-usage",  "command": "df -h" },
+      { "name": "restart-app", "command": "systemctl restart my-app" }
+    ]
   },
   "ports": []
 }
@@ -436,8 +439,10 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `control.listen` | string | `""` | 控制端口监听地址，如 `":19999"`。为空时不启动控制端口 |
+| `control.listen` | string | `""` | 控制端口监听地址，如 `":29999"`。为空时不启动控制端口 |
 | `control.auth.type` | string | `"none"` | 认证方式：`"none"`（无认证）或 `"token"`（Token 认证） |
+| `control.pin` | string | `""` | 第二重认证 PIN 码（6-8 位）。仅用于 `/run` 接口的执行**未在白名单内**的命令时（ad-hoc），采用**常量时间比较**防时序攻击 |
+| `control.commands` | array | `[]` | 可执行命令白名单，元素为 `{ "name": "标识名", "command": "shell 命令" }`。白名单内的命令通过 `/run` 执行时**只需 Token**，无需 PIN |
 | `ports[].listen` | string | **必填** | 监听地址，如 `":3000"` |
 | `ports[].command` | string | **必填** | 启动命令。**注意**：gatekeeper 使用 `execvp` 直接执行，**不支持** `VAR=val` 环境变量前缀。需改用 `/usr/bin/env VAR=val ...` 写法，如 `/usr/bin/env DATA_DIR=/data node app.js` |
 | `ports[].stop_command` | string | `""` | 停止命令，同 `command`，需用 `/usr/bin/env` 包装环境变量 |
@@ -451,7 +456,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 也可以通过命令行参数 `--control-port` 指定控制端口地址，优先级高于 config.json：
 
 ```bash
-./gatekeeper --control-port :19999 gatekeeper-config.json
+./gatekeeper --control-port :29999 gatekeeper-config.json
 ```
 
 ### HTTP 端点
@@ -461,6 +466,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
 | `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.5"}` |
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
+| `POST /run` | POST | 执行命令。白名单命令用 `{"name":"..."}` 指定（仅需 Token）；ad-hoc 命令用 `{"command":"...","pin":"..."}`（需 Token+PIN）。支持 `"stream":true` 流式输出 |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |
 | `POST /config` | POST | 接收请求体中的新配置 JSON 并应用 |
 
@@ -469,11 +475,35 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 当 `auth.type` 为 `"token"` 时，所有请求需要在 HTTP 头中携带 Token：
 
 ```bash
-curl -X POST http://127.0.0.1:19999/reload \
+curl -X POST http://127.0.0.1:29999/reload \
   -H "X-Auth-Token: my-secret-token"
 ```
 
 无认证或 Token 错误时返回 `401 Unauthorized`。
+
+### 命令执行（POST /run）
+
+`POST /run` 提供两种执行方式：
+
+1. **白名单预设命令**：命令在 `control.commands` 中预配置。请求体 `{"name": "disk-usage"}`，仅需 Token 认证。
+2. **临时 ad-hoc 命令**：请求体携带完整命令 `{"command": "echo hi", "pin": "123456"}`，需 Token + PIN 双重认证（PIN 做常量时间比较，连续失败 5 次触发 60 秒冷却）。
+
+同步响应（默认）以 JSON 返回退出码与输出：
+
+```json
+{"exit_code":0,"stdout":"...","truncated":false}
+```
+
+`"stream": true` 时切换为 HTTP chunked 流式输出，适合 `tail -f`、日志观察等长任务，最终以 `[exit=N]` 结束：
+
+```bash
+curl -X POST http://127.0.0.1:29999/run \
+  -H "Content-Type: application/json" \
+  -H "X-Auth-Token: my-secret-token" \
+  -d '{"name":"disk-usage","stream":true}'
+```
+
+> **安全提示**：ad-hoc 命令会在 gatekeeper 进程所在用户下以 `/bin/sh -c`（POSIX）/ `cmd.exe /c`（Windows）执行，权限等同 gatekeeper 本身。建议仅在受信内网启用，并优先使用白名单预设命令。
 
 ### 热加载行为
 
@@ -494,16 +524,16 @@ curl -X POST http://127.0.0.1:19999/reload \
 # 若 auth.type = "token"，每条请求需加: -H "X-Auth-Token: <token>"
 
 # 健康检查
-curl http://127.0.0.1:19999/health
+curl http://127.0.0.1:29999/health
 
 # 查询版本
-curl http://127.0.0.1:19999/version
+curl http://127.0.0.1:29999/version
 
 # 触发配置重新加载
-curl -X POST http://127.0.0.1:19999/reload
+curl -X POST http://127.0.0.1:29999/reload
 
 # 直接发送新配置
-curl -X POST http://127.0.0.1:19999/config \
+curl -X POST http://127.0.0.1:29999/config \
   -H "Content-Type: application/json" \
   -d '{"ports":[{"listen":":3000","command":"./app"}]}'
 ```

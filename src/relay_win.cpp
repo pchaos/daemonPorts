@@ -1,5 +1,6 @@
 #include "relay_platform.h"
 #include <cstring>
+#include <algorithm>
 #include <bcrypt.h>
 
 namespace platform {
@@ -150,6 +151,121 @@ int runCommand(const std::string& command) {
     GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess);
     return static_cast<int>(exitCode);
+}
+
+// ── Shell command execution (for /run control endpoint) ───────────────
+// Uses cmd.exe /c to support pipes, redirects, &&. The caller is
+// authenticated (token+PIN), so shell power is the desired capability.
+
+static std::string hexLen(size_t n) {
+    const char* hexc = "0123456789abcdef";
+    std::string s;
+    for (size_t i = n;;) { s += hexc[i & 0xf]; if (!(i >>= 4)) break; }
+    std::reverse(s.begin(), s.end());
+    return s;
+}
+
+int runShellCommand(const std::string& command, int timeoutMs,
+                     int maxOutputBytes, std::string& output) {
+    output.clear();
+    HANDLE pipeR = NULL, pipeW = NULL;
+    SECURITY_ATTRIBUTES sa{sizeof(sa), NULL, TRUE};
+    if (!CreatePipe(&pipeR, &pipeW, &sa, 0)) return -1;
+    SetHandleInformation(pipeR, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOA si{0}; PROCESS_INFORMATION pi{0};
+    si.cb = sizeof(si);
+    si.hStdOutput = pipeW; si.hStdError = pipeW; si.hStdInput = NULL;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    std::string cmd = "cmd.exe /c " + command;
+    BOOL ok = CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, TRUE,
+                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    CloseHandle(pipeW); pipeW = NULL;
+    if (!ok) { CloseHandle(pipeR); return -1; }
+    CloseHandle(pi.hThread);
+    int exitCode = -1;
+    char buf[4096];
+    DWORD deadline = GetTickCount() + (DWORD)timeoutMs;
+    while ((int)output.size() < maxOutputBytes) {
+        DWORD now = GetTickCount();
+        if ((int)(now - deadline) >= 0) break;
+        DWORD avail = 0;
+        if (!PeekNamedPipe(pipeR, NULL, 0, NULL, &avail, NULL) || avail == 0) {
+            if (WaitForSingleObject(pi.hProcess, 50) == WAIT_OBJECT_0) break;
+            continue;
+        }
+        DWORD toRead = avail;
+        int room = maxOutputBytes - (int)output.size();
+        if ((int)toRead > room) toRead = (DWORD)room;
+        if (toRead > sizeof(buf)) toRead = sizeof(buf);
+        DWORD got = 0;
+        if (ReadFile(pipeR, buf, toRead, &got, NULL) && got > 0)
+            output.append(buf, got);
+        else break;
+    }
+    if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
+        DWORD ec = 0; if (GetExitCodeProcess(pi.hProcess, &ec)) exitCode = (int)ec;
+    } else {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 2000);
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pipeR);
+    return exitCode;
+}
+
+struct StreamCtx { HANDLE pipeR; HANDLE hProc; PlatformHandle socket; int timeoutMs; const std::atomic<bool>* stop; };
+
+static void* streamCopyThread(void* arg) {
+    StreamCtx* c = static_cast<StreamCtx*>(arg);
+    char buf[4096];
+    DWORD deadline = GetTickCount() + (DWORD)c->timeoutMs;
+    while (!c->stop->load()) {
+        DWORD now = GetTickCount();
+        if ((int)(now - deadline) >= 0) break;
+        DWORD avail = 0;
+        if (!PeekNamedPipe(c->pipeR, NULL, 0, NULL, &avail, NULL) || avail == 0) {
+            if (WaitForSingleObject(c->hProc, 50) == WAIT_OBJECT_0) break;
+            continue;
+        }
+        if (avail > sizeof(buf)) avail = sizeof(buf);
+        DWORD got = 0;
+        if (ReadFile(c->pipeR, buf, avail, &got, NULL) && got > 0) {
+            std::string chunk(buf, got);
+            std::string frame = hexLen(chunk.size()) + "\r\n" + chunk + "\r\n";
+            if (platform::write_fd(c->socket, frame.data(), frame.size()) <= 0) break;
+        } else break;
+    }
+    return nullptr;
+}
+
+int runShellStream(const std::string& command, PlatformHandle socket,
+                   int timeoutMs, const std::atomic<bool>& stop) {
+    HANDLE pipeR = NULL, pipeW = NULL;
+    SECURITY_ATTRIBUTES sa{sizeof(sa), NULL, TRUE};
+    if (!CreatePipe(&pipeR, &pipeW, &sa, 0)) return -1;
+    SetHandleInformation(pipeR, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOA si{0}; PROCESS_INFORMATION pi{0};
+    si.cb = sizeof(si);
+    si.hStdOutput = pipeW; si.hStdError = pipeW; si.hStdInput = NULL;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    std::string cmd = "cmd.exe /c " + command;
+    BOOL ok = CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, TRUE,
+                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    CloseHandle(pipeW); pipeW = NULL;
+    if (!ok) { CloseHandle(pipeR); return -1; }
+    CloseHandle(pi.hThread);
+    StreamCtx ctx{pipeR, pi.hProcess, socket, timeoutMs, &stop};
+    streamCopyThread(&ctx);
+    int exitCode = -2;
+    if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
+        DWORD ec = 0; if (GetExitCodeProcess(pi.hProcess, &ec)) exitCode = (int)ec;
+    } else {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 2000);
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pipeR);
+    return exitCode;
 }
 
 bool isChildAlive(pid_t pid) {

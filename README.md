@@ -26,6 +26,7 @@
 - **mixed 模式**：协议感知引导 或 常驻代理转发，支持 HTTP / SOCKS5 / SOCKS4
 - **proxy 模式**：SOCKS5 代理服务器，支持无认证 / USER+PASS 认证，转发到 HTTP 后端
 - **控制端口热加载**：通过 HTTP 控制端口运行时热加载配置，支持 Token 认证，无需重启进程
+- **控制端口命令执行（/run）**：白名单预设命令 + 临时命令双通道，临时命令需 Token + PIN 双重认证（常量时间比较，防暴力破解），支持同步 JSON 与 chunked 流式输出
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间

@@ -1,4 +1,28 @@
 {
+  "control": {
+    "listen": ":29999",
+    "auth": {
+      "type": "token",
+      "token": "my-secret-token"
+    },
+    "pin": "1234",
+    "max_connections": 20,
+    "rate_limit_seconds": 60
+  },
+  "commands": [
+    {
+      "name": "disk-usage",
+      "command": "df -h"
+    },
+    {
+      "name": "process-list",
+      "command": "ps aux --sort=-%cpu | head -10"
+    },
+    {
+      "name": "restart-web",
+      "command": "systemctl restart web-app"
+    }
+  ],
   "ports": [
     {
       "name": "web",

@@ -155,6 +155,7 @@ target("test-gatekeeper")
     set_kind("binary")
     set_languages("c++11")
     add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_retry.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp", "test/test_control_server.cpp", "test/test_stubs.cpp")
+    add_files("test/test_run_command.cpp")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
     else

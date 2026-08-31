@@ -1,4 +1,34 @@
 {
+  "control": {
+    "listen": ":29999",
+    "auth": {
+      "type": "token",
+      "token": "gatekeeper-secret"
+    },
+    "pin": "4271",
+    "max_connections": 20,
+    "rate_limit_seconds": 60,
+    "commands": [
+      {
+        "name": "stream-echo",
+        "command": "echo line1 && sleep 0.1 && echo line2"
+      }
+    ]
+  },
+  "commands": [
+    {
+      "name": "disk-usage",
+      "command": "df -h"
+    },
+    {
+      "name": "process-list",
+      "command": "ps aux --sort=-%cpu | head -10"
+    },
+    {
+      "name": "check-ports",
+      "command": "ss -tlnp"
+    }
+  ],
   "ports": [
     {
       "name": "9router",

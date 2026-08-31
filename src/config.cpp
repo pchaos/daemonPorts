@@ -23,6 +23,20 @@ std::vector<PortConfig> parseConfig(const std::string& json) {
                     if (auto* rs = ctrl->get("rate_limit_seconds")) g_controlConfig.rateLimitSeconds = (int)rs->as_num();
                 }
             }
+            if (auto* p = ctrl->get("pin")) g_controlConfig.pin = p->as_str();
+            if (auto* cmds = ctrl->get("commands")) {
+                if (cmds->is_arr()) {
+                    for (size_t i = 0; i < cmds->a.size(); i++) {
+                        auto* c = cmds->idx(i);
+                        if (!c || !c->is_obj()) continue;
+                        CommandConfig cc;
+                        if (auto* n = c->get("name")) cc.name = n->as_str();
+                        if (auto* cmd = c->get("command")) cc.command = cmd->as_str();
+                        if (!cc.name.empty() && !cc.command.empty())
+                            g_controlConfig.commands.push_back(std::move(cc));
+                    }
+                }
+            }
         }
     }
     auto* ports = root.get("ports");
