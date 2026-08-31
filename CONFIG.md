@@ -464,7 +464,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
-| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.5"}` |
+| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.6"}` |
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
 | `POST /run` | POST | 执行命令。白名单命令用 `{"name":"..."}` 指定（仅需 Token）；ad-hoc 命令用 `{"command":"...","pin":"..."}`（需 Token+PIN）。支持 `"stream":true` 流式输出 |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |
