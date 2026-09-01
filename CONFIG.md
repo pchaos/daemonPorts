@@ -515,6 +515,20 @@ curl -X POST http://127.0.0.1:29999/run \
 4. **修改端口**：旧端口标记为 `pendingRemoval`，同时创建并启动新端口
 5. **未变化端口**：保持不变
 
+> **⚠️ 注意：修改端口配置会导致后端关停再重启**
+
+对被判定为"修改"的端口（`configsEqual` 返回 `false`，即 `listen`、`command`、`mode`、`hold_port`、`delay`、`refresh_seconds`、`retry_seconds`、`max_retry_seconds`、`auto_restart`、`enabled`、`stop_command`、`idle_minutes`、`stack_size`、`http_target`、`monitor` 等任一字段变化），
+gatekeeper 会关停旧后端并启动新的后端，具体流程：
+
+1. 旧端口移入 `pendingRemoval`，从活跃列表移除，不再接受新连接
+2. 等待 `idle_minutes` 空闲超时后执行 `gracefulStop()`
+3. `gracefulStop()` 顺序：先执行 `stop_command` → 等待最多 30 秒 → 超时则 fallback `SIGTERM`
+4. 端口释放后，新后端启动
+
+对于**仅影响启动引导**的字段（如 `refresh_seconds`），新值在下一次后端重启时才生效，
+已有活跃连接不受影响。如果仅为此类字段热重载，等同于白白关停再启动一次已运行的服务，
+建议评估是否需要立即生效，或等待下次后端自然退出后再改配置。
+
 > **注意**：删除/修改端口时，旧后端不会立即停止，而是等待空闲超时（`idle_minutes`）后自动 `gracefulStop()`，确保活跃连接不受影响。
 
 ### 示例
