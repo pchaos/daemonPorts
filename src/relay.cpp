@@ -345,10 +345,10 @@ void PortRelay::monitorBackend() {
                 if (maxRetries < 1) maxRetries = 1;
                 for (int retry = 0; retry < maxRetries; retry++) {
                     realPid = platform::findPidUsingPort((uint16_t)port);
-                    if (realPid > 0 && realPid != backendPid_ && realPid != getpid()) break;
+                    if (realPid > 0 && realPid != backendPid_ && realPid != platform::currentPid()) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                 }
-                if (realPid > 0 && realPid != backendPid_ && realPid != getpid()) {
+                if (realPid > 0 && realPid != backendPid_ && realPid != platform::currentPid()) {
                     std::cout << "  [" << name_ << "] 检测到 daemon 进程 (PID=" << realPid
                               << ")，更新后端 PID" << std::endl;
                     backendPid_ = realPid;

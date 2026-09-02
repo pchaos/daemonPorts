@@ -428,6 +428,6 @@ bool ControlServer::runStream(int fd, const std::string& command) {
         return nullptr;
     }, arg, 512);
     std::lock_guard<std::mutex> lk(streamThreadsMtx_);
-    streamThreads_.push_back(th);
+    streamThreads_.push_back(std::move(th));
     return true;  // thread owns the fd
 }

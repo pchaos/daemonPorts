@@ -30,6 +30,7 @@ using PlatformHandle = int;
 #include <ws2tcpip.h>       // getaddrinfo, freeaddrinfo, inet_pton
 #include <windows.h>
 #include <io.h>
+#include <process.h>        // _getpid (Windows)
 using pid_t = intptr_t;
 using PlatformThread = std::thread;
 using PlatformHandle = intptr_t;
@@ -113,6 +114,14 @@ void termProcess(pid_t pid);
 bool isChildAlive(pid_t pid);
 pid_t waitChild(pid_t pid);
 bool isProcessRunning(pid_t pid);
+// Current process ID (portable wrapper for getpid/_getpid)
+inline pid_t currentPid() {
+#ifndef _WIN32
+    return ::getpid();
+#else
+    return (pid_t)_getpid();
+#endif
+}
 void createThread(PlatformThread& thread, void* (*func)(void*), void* arg, int stackSizeKB);
 void joinThread(PlatformThread& thread);
 bool threadValid(const PlatformThread& thread);
