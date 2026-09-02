@@ -23,18 +23,23 @@ fi
 echo "1. 复制二进制到 $REMOTE:/tmp/gatekeeper-new ..."
 scp "$BINARY" "$REMOTE:/tmp/gatekeeper-new"
 
-echo "2. 停止远程 gatekeeper 服务..."
-ssh "$REMOTE" "sudo systemctl kill gatekeeper" || true
-sleep 2
+echo "2. 停止远程 gatekeeper 服务 (等待完全停止)..."
+# 优雅停止; 若卡住则强杀全部进程。必须确认 inactive 才能安全替换二进制
+# (否则 Text file busy, 且 start 对已 active 服务是 no-op, 旧进程不换新)
+ssh "$REMOTE" "sudo systemctl stop gatekeeper 2>/dev/null \
+    || sudo systemctl kill --kill-whom=all -s SIGKILL gatekeeper 2>/dev/null || true"
+ssh "$REMOTE" "for i in \$(seq 1 180); do systemctl is-active gatekeeper >/dev/null 2>&1 || exit 0; sleep 1; done; echo '错误: gatekeeper 未能停止'; exit 1" \
+    || { echo "错误: 无法停止远程 gatekeeper 服务"; exit 1; }
 
 echo "3. 替换二进制..."
 ssh "$REMOTE" "sudo rm -f /usr/local/bin/gatekeeper && sudo cp /tmp/gatekeeper-new /usr/local/bin/gatekeeper"
 
 echo "4. 启动服务..."
-ssh "$REMOTE" "sudo systemctl start gatekeeper && sleep 2"
+ssh "$REMOTE" "sudo systemctl start gatekeeper" && sleep 2
 
-echo "5. 检查状态..."
-ssh "$REMOTE" "systemctl status gatekeeper --no-pager | head -12"
+echo "5. 检查状态与版本..."
+ssh "$REMOTE" "systemctl status gatekeeper --no-pager | head -6; /usr/local/bin/gatekeeper --version"
+
 
 echo ""
 echo "✅ 部署完成!"
