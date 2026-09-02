@@ -139,6 +139,8 @@ public:
     void stop();
 
     void gracefulStop();
+    // 驱逐：关闭运行中的后端（含混合/代理多后端）并对该条目做本次运行内粘性禁用。
+    void evict();
     void resetForIdle();
     bool autoRestart() const { return autoRestart_; }
     bool isBackendRunning() const { return backendPid_.load() > 0; }

@@ -3,6 +3,7 @@
 #include "tcp_monitor.h"
 #include "port_group.h"
 #include "control_server.h"
+#include "system_monitor.h"
 #include <map>
 #include <mutex>
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <thread>
 #include <sstream>
+#include <fstream>
 #ifndef _WIN32
 #include <netinet/tcp.h>
 #include <signal.h>
@@ -382,15 +384,23 @@ int main(int argc, char* argv[]) {
 
     // "-" 表示从 stdin 读取配置
     std::vector<PortConfig> cfgs;
+    std::string rawConfig;
     if (configPath == "-") {
         std::stringstream ss;
         ss << std::cin.rdbuf();
-        cfgs = parseConfig(ss.str());
+        rawConfig = ss.str();
+        cfgs = parseConfig(rawConfig);
     } else {
-            cfgs = loadConfig(configPath);
-            g_currentCfgs = cfgs;
-            g_configPath = configPath;
+        {
+            std::ifstream f(configPath);
+            if (f) { std::stringstream ss; ss << f.rdbuf(); rawConfig = ss.str(); }
+        }
+        cfgs = parseConfig(rawConfig);
+        g_currentCfgs = cfgs;
+        g_configPath = configPath;
     }
+    // 启动时解析一次 system_monitor 段（与 control 段语义一致，热加载不触碰）
+    parseSystemMonitorConfig(rawConfig);
     if (cfgs.empty()) {
         std::cerr << "错误: 没有有效的端口配置" << std::endl;
         return 1;
@@ -498,6 +508,14 @@ int main(int argc, char* argv[]) {
         monitorThread = std::thread(monitorLoop);
     }
 
+    // 启动系统资源监控采样器（默认关闭，配置 system_monitor.enabled=true 时启用）
+    std::unique_ptr<SystemMonitor> sysMon;
+    if (g_sysMonConfig.enabled) {
+        sysMon.reset(new SystemMonitor(g_sysMonConfig));
+        g_sysMon = sysMon.get();
+        sysMon->start();
+    }
+
     // 通知 systemd 启动完成
     if (NOTIFY_DID_SEND()) {
         std::cout << "systemd: READY=1" << std::endl;
@@ -532,5 +550,8 @@ int main(int argc, char* argv[]) {
         for (auto& r : g_relays) r->stop();
     }
     if (monitorThread.joinable()) monitorThread.join();
+    // 停系统资源监控采样器
+    if (sysMon) sysMon->stop();
+    g_sysMon = nullptr;
     return 0;
 }

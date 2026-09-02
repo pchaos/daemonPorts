@@ -82,4 +82,25 @@ struct ControlConfig {
 };
 extern ControlConfig g_controlConfig;
 
+// ── System monitor (系统资源监控) 配置 ──────────────────────────────
+struct EvictionConfig {
+    bool    enabled = false;
+    double  memoryCritical = 0.90;  // 物理内存近满载阈值
+    double  swapCritical = 0.90;    // 虚拟(swap)近满载阈值
+    int     sustainSeconds = 900;   // 双满载持续秒数后触发驱逐
+};
+struct SystemMonitorConfig {
+    bool    enabled = false;
+    int     intervalSeconds = 300;      // 常规采样周期
+    int     fastIntervalSeconds = 60;   // 高负载采样周期
+    double  memoryHighThreshold = 0.66; // 物理内存 → 快周期阈值
+    double  swapHighThreshold = 0.5;    // swap → 应急态阈值
+    std::vector<std::string> emergencyCommands = {"reboot", "shutdown"};
+    EvictionConfig eviction;
+};
+extern SystemMonitorConfig g_sysMonConfig;
+// 启动时解析一次（与 control 段一致，热加载不触碰）
+// json 传入完整配置文本，仅提取顶层 system_monitor 段
+void parseSystemMonitorConfig(const std::string& json);
+
 #endif // GATEKEEPER_CONFIG_H

@@ -6,6 +6,58 @@
 #include <sstream>
 
 ControlConfig g_controlConfig;
+SystemMonitorConfig g_sysMonConfig;
+
+// 启动时解析一次顶层 system_monitor 段（热加载不触碰）。
+// 与 control 段语义一致：采样器在启动时按此配置启停。
+void parseSystemMonitorConfig(const std::string& json) {
+    SystemMonitorConfig cfg;   // 默认值起步，缺省键保持默认
+    JsonValue root = parse_json(json);
+    if (!root.is_obj()) return;
+    auto* sm = root.get("system_monitor");
+    if (!sm || !sm->is_obj()) { g_sysMonConfig = cfg; return; }
+
+    if (auto* e = sm->get("enabled")) cfg.enabled = e->as_bool();
+    if (auto* iv = sm->get("interval_seconds")) cfg.intervalSeconds = (int)iv->as_num();
+    if (auto* fi = sm->get("fast_interval_seconds")) cfg.fastIntervalSeconds = (int)fi->as_num();
+    if (auto* mh = sm->get("memory_high_threshold")) cfg.memoryHighThreshold = mh->as_num();
+    if (auto* sh = sm->get("swap_high_threshold")) cfg.swapHighThreshold = sh->as_num();
+
+    // 应急免密名单（默认 reboot/shutdown）
+    if (auto* cmds = sm->get("emergency_commands")) {
+        if (cmds->is_arr()) {
+            std::vector<std::string> list;
+            for (size_t i = 0; i < cmds->a.size(); ++i) {
+                auto* c = cmds->idx(i);
+                if (c && c->is_str() && !c->as_str().empty()) list.push_back(c->as_str());
+            }
+            if (!list.empty()) cfg.emergencyCommands = std::move(list);
+        }
+    }
+
+    // 驱逐配置
+    if (auto* ev = sm->get("eviction")) {
+        if (ev->is_obj()) {
+            EvictionConfig ec;
+            if (auto* e = ev->get("enabled")) ec.enabled = e->as_bool();
+            if (auto* mc = ev->get("memory_critical")) ec.memoryCritical = mc->as_num();
+            if (auto* sc = ev->get("swap_critical")) ec.swapCritical = sc->as_num();
+            if (auto* ss = ev->get("sustain_seconds")) ec.sustainSeconds = (int)ss->as_num();
+            // 钳制阈值到 (0,1)
+            if (ec.memoryCritical <= 0.0 || ec.memoryCritical > 1.0) ec.memoryCritical = 0.90;
+            if (ec.swapCritical <= 0.0 || ec.swapCritical > 1.0) ec.swapCritical = 0.90;
+            if (ec.sustainSeconds < 1) ec.sustainSeconds = 900;
+            cfg.eviction = ec;
+        }
+    }
+    // 钳制阈值
+    if (cfg.intervalSeconds < 1) cfg.intervalSeconds = 300;
+    if (cfg.fastIntervalSeconds < 1) cfg.fastIntervalSeconds = 60;
+    if (cfg.memoryHighThreshold <= 0.0 || cfg.memoryHighThreshold > 1.0) cfg.memoryHighThreshold = 0.66;
+    if (cfg.swapHighThreshold <= 0.0 || cfg.swapHighThreshold > 1.0) cfg.swapHighThreshold = 0.5;
+
+    g_sysMonConfig = cfg;
+}
 
 std::vector<PortConfig> parseConfig(const std::string& json) {
     JsonValue root = parse_json(json);

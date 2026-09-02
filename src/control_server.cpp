@@ -2,7 +2,9 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <cstdio>
 #include "relay.h"
+#include "system_monitor.h"
 #include <vector>
 #include "json.h"
 
@@ -203,6 +205,12 @@ bool ControlServer::handleRequest(int clientFd) {
     } else if (req.method == "GET" && req.path == "/status") {
         handleStatus(clientFd, req);
         return true;
+    } else if (req.method == "GET" && req.path == "/sysinfo") {
+        handleSysInfo(clientFd, req);
+        return true;
+    } else if (req.method == "GET" && (req.path == "/procs" || req.path.rfind("/procs?", 0) == 0)) {
+        handleProcs(clientFd, req);
+        return true;
     } else if (req.method == "POST" && req.path == "/reload") {
         handleReload(clientFd, req);
         return true;
@@ -252,6 +260,75 @@ void ControlServer::handleStatus(int fd, const HttpRequest&) {
     }
     body += "]}";
     sendResponse(fd, 200, "application/json", body);
+}
+
+// GET /sysinfo — 系统资源监控快照（采样器未启用时返回 enabled:false）
+void ControlServer::handleSysInfo(int fd, const HttpRequest&) {
+    if (!g_sysMon || !g_sysMon->enabled()) {
+        sendResponse(fd, 200, "application/json", "{\"enabled\":false}");
+        return;
+    }
+    auto f = [](double v) {
+        char buf[24];
+        std::snprintf(buf, sizeof buf, "%.2f", v);
+        return std::string(buf);
+    };
+    std::ostringstream os;
+    os << "{\"enabled\":true"
+       << ",\"cpu_percent\":";
+    double cpu = g_sysMon->cpuPercent.load();
+    if (cpu < 0) os << "null"; else os << f(cpu);
+    os << ",\"memory\":{\"total\":" << g_sysMon->memTotal.load()
+       << ",\"available\":" << g_sysMon->memAvailable.load()
+       << ",\"used\":" << g_sysMon->memUsed.load()
+       << ",\"percent\":" << f(g_sysMon->memPercent.load()) << "}";
+    double sp = g_sysMon->swapPercent.load();
+    if (sp < 0) {
+        os << ",\"swap\":null";
+    } else {
+        os << ",\"swap\":{\"total\":" << g_sysMon->swapTotal.load()
+           << ",\"used\":" << g_sysMon->swapUsed.load()
+           << ",\"percent\":" << f(sp) << "}";
+    }
+    os << ",\"mode\":\"" << (g_sysMon->inFastMode() ? "fast" : "normal") << "\""
+       << ",\"emergency\":" << (g_sysMon->inEmergency() ? "true" : "false")
+       << "}";
+    sendResponse(fd, 200, "application/json", os.str());
+}
+
+// GET /procs?limit=N — 按 RSS 降序返回前 N 个进程（过滤自身），默认 10，上限 100
+void ControlServer::handleProcs(int fd, const HttpRequest& req) {
+    if (!g_sysMon || !g_sysMon->enabled()) {
+        sendResponse(fd, 200, "application/json", "{\"enabled\":false}");
+        return;
+    }
+    int limit = 10;
+    auto q = req.path.find('?');
+    if (q != std::string::npos) {
+        std::string qs = req.path.substr(q + 1);
+        auto eq = qs.find('=');
+        if (eq != std::string::npos && qs.substr(0, eq) == "limit") {
+            try { limit = std::stoi(qs.substr(eq + 1)); } catch (...) {}
+        }
+    }
+    if (limit < 1) limit = 1;
+    if (limit > 100) limit = 100;
+    auto list = readProcessList();
+    std::sort(list.begin(), list.end(), [](const ProcMemInfo& a, const ProcMemInfo& b) {
+        return a.rss > b.rss;
+    });
+    if ((int)list.size() > limit) list.resize(limit);
+    std::ostringstream os;
+    os << "{\"procs\":[";
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (i) os << ",";
+        os << "{\"pid\":" << list[i].pid
+           << ",\"name\":\"" << jsonEscape(list[i].name) << "\""
+           << ",\"rss\":" << list[i].rss
+           << ",\"vms\":" << list[i].vms << "}";
+    }
+    os << "]}";
+    sendResponse(fd, 200, "application/json", os.str());
 }
 
 void ControlServer::handleReload(int fd, const HttpRequest&) {
@@ -355,11 +432,15 @@ ControlServer::RunResolution ControlServer::resolveRun(const HttpRequest& req) {
         r.httpStatus = 400; r.errMsg = "missing 'name' or 'command'";
         return r;
     }
-    // Ad-hoc path: requires PIN
+    // Ad-hoc path: requires PIN — 除非系统处于应急态且命令命中应急免密名单
     std::string pin = body.get("pin") ? body.get("pin")->as_str() : "";
     if (!verifyPin(pin)) {
-        r.httpStatus = 401; r.errMsg = "PIN required or incorrect";
-        return r;
+        if (sysMonEmergencyPinBypass(cmd)) {
+            /* 应急免密放行（swap 超阈值 + 命令首词命中 emergency_commands） */
+        } else {
+            r.httpStatus = 401; r.errMsg = "PIN required or incorrect";
+            return r;
+        }
     }
     r.command = wantStream ? ("\x01STREAM\x01" + cmd) : cmd;
     return r;

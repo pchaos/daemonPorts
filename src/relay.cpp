@@ -1064,6 +1064,22 @@ platform::killProcess(backendPid_);
     backendPid_ = 0;
 }
 
+// 驱逐：停机运行中的后端（simple 走 stop_command/SIGTERM，混合/代理遍历协议后端），
+// 然后 signalStop 关闭监听 → 本次运行内粘性禁用（auto_restart 不会复活，/reload 或重启重新武装）。
+void PortRelay::evict() {
+    if (backendPid_ > 0) {
+        gracefulStop();
+    }
+    for (auto& b : backends_) {
+        if (b.pid > 0 && platform::isChildAlive(b.pid)) {
+            std::cout << "  [" << name_ << "] 驱逐: 关闭协议后端 (PID=" << b.pid << ")" << std::endl;
+            platform::killProcess(b.pid);
+            b.pid = 0;
+        }
+    }
+    signalStop();   // 关闭监听，条目本次运行内禁用
+}
+
 void PortRelay::resetForIdle() {
     if (platform::threadValid(listenThread_)) platform::joinThread(listenThread_);
     if (platform::threadValid(monitorThread_)) platform::joinThread(monitorThread_);

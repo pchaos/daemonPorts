@@ -82,6 +82,8 @@ private:
     void handleVersion(int fd, const HttpRequest& req);
     void handleHealth(int fd, const HttpRequest& req);
     void handleStatus(int fd, const HttpRequest& req);
+    void handleSysInfo(int fd, const HttpRequest& req);
+    void handleProcs(int fd, const HttpRequest& req);
     // Returns true when the caller (handleRequest) should close the fd;
     // false when the streaming thread owns the fd and closes it.
     bool handleRun(int fd, const HttpRequest& req);

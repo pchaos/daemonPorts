@@ -411,6 +411,107 @@ TCP 连接监控已启动，轮询间隔 60 秒
 
 ---
 
+## 系统资源监控配置（system_monitor）
+
+gatekeeper 可监控**整台宿主机**的 CPU 与内存（物理内存 + 虚拟内存/swap），并通过配置段启用。采样在独立线程运行，与端口级 TCP 连接监控互不干扰。
+
+> 该段**启动时生效**（与 `control` 段一致），热加载 `/reload` 不触碰；启用或改参数需重启进程。
+
+```json
+{
+  "system_monitor": {
+    "enabled": true,
+    "interval_seconds": 300,
+    "fast_interval_seconds": 60,
+    "memory_high_threshold": 0.66,
+    "swap_high_threshold": 0.5,
+    "emergency_commands": ["reboot", "shutdown"],
+    "eviction": {
+      "enabled": true,
+      "memory_critical": 0.90,
+      "swap_critical": 0.90,
+      "sustain_seconds": 900
+    }
+  }
+}
+```
+
+### 字段说明
+
+**system_monitor**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | bool | `false` | 是否启用系统资源监控（默认关闭，开启才采样/打日志/暴露端点） |
+| `interval_seconds` | int | `300` | 常规采样周期（秒） |
+| `fast_interval_seconds` | int | `60` | 高负载采样周期（秒）；物理内存使用率超过 `memory_high_threshold` 时切换 |
+| `memory_high_threshold` | float | `0.66` | 物理内存 used/total 超过此值 → 切换到快周期采样 |
+| `swap_high_threshold` | float | `0.5` | swap used/total 超过此值 → 进入应急态（免 PIN 名单生效） |
+| `emergency_commands` | string[] | `["reboot","shutdown"]` | 应急态下可免 PIN 执行的 ad-hoc 命令（按首词匹配） |
+
+**eviction（可选子段）**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | bool | `false` | 是否启用自动驱逐 |
+| `memory_critical` | float | `0.90` | 物理内存近满载阈值（可配） |
+| `swap_critical` | float | `0.90` | 虚拟内存/swap 近满载阈值（可配） |
+| `sustain_seconds` | int | `900` | 物理 ∧ swap 双满载**持续**此秒数后触发驱逐（默认 15 分钟） |
+
+### 采样行为
+
+- 采样周期随物理内存使用率自适应：超过 `memory_high_threshold` 用 `fast_interval_seconds`，否则 `interval_seconds`。
+- `used` 口径 = 总量 − 可用（Linux `MemAvailable`），避免把 page cache 误算为已用。
+- CPU 占用率为上一采样间隔的区间差值；首拍无基线输出 `null`。
+- 指标读不到的平台/容器环境（如无 swap）→ 对应字段返回 `null`，采样器不崩溃。
+
+### 控制接口
+
+启用后，控制服务器新增两个端点（复用 `control.auth` 的 token 认证）：
+
+- `GET /sysinfo` — 系统资源快照：
+
+  ```json
+  {
+    "enabled": true,
+    "cpu_percent": 12.3,
+    "memory":  { "total": 17179869184, "available": 9448928051, "used": 7730941133, "percent": 45.0 },
+    "swap":   { "total": 8589934592, "used": 858993459, "percent": 10.0 },
+    "mode": "normal",
+    "emergency": false
+  }
+  ```
+
+  `mode` 为 `"normal"|"fast"`（当前采样周期），`emergency` 表示当前是否处于应急态。
+
+- `GET /procs?limit=N` — 按 RSS 降序返回前 N 个进程的内存占用（过滤 gatekeeper 自身），默认 10，上限 100：
+
+  ```json
+  { "procs": [ { "pid": 1234, "name": "node", "rss": 536870912, "vms": 2147483648 } ] }
+  ```
+
+系统监控**未启用**时，两个端点均返回 `{"enabled":false}`。
+
+### 应急免密
+
+当 swap 使用率超过 `swap_high_threshold` 进入应急态时，`POST /run` 的 ad-hoc 裸命令（`command` 字段）若**首词**命中 `emergency_commands` 名单，可**免 PIN** 执行——用于在 swap 打满、记不起 PIN 时紧急 `reboot`/`shutdown` 恢复机器。
+
+- 匹配规则：剥掉前导 `sudo`/`doas` 后取首词精确比对。`sudo reboot`、`reboot --force`、`shutdown -h now` 均命中；`echo reboot` 不命中。
+- 白名单预设（presets）不受影响，本就不需 PIN。
+- 系统无 swap、或采样未启用时**永不进入应急态** → 免密永不生效。
+- 该豁免全局生效（不限回环）。这是**主动接受的安全削弱**：能触达控制端口的客户端可自行打满 swap 后免密 reboot/shutdown（DoS 面）。见 `docs/adr/0001`。
+
+### 自动驱逐（内存兜底动作）
+
+当**物理内存 ∧ 虚拟内存(swap)** 双双超过各自 `memory_critical`/`swap_critical`，并**持续** `sustain_seconds`（默认 15 分钟）后，gatekeeper 自动关闭"端口无数据流量最久"的运行中子配置项，防止系统进入内核 OOM。
+
+- 选型：所有运行中的子配置项里，取 `now − 最近活跃时间` 最大者（即闲置最久）；并列取 RSS 较大者。全活跃时仍驱逐"最不活跃"者（受控驱逐优于失控 OOM）。
+- 驱逐后该端口条目**本次运行内粘性禁用**：`auto_restart` 不会复活它，重启进程或 `/reload` 才重新武装（与 `idle_minutes` 空闲自停——下一次连接即可复活——行为不同）。
+- 每次触发最多驱逐一个；若 15 分钟后仍满载，再驱逐下一个最闲置者。
+- 这是保活优先策略：杀最闲置 ≠ 杀最大内存，释放可能较少，收敛是分钟级渐进的。见 `docs/adr/0002`。
+
+---
+
 ## 控制端口配置
 
 gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需重启进程。

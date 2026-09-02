@@ -21,10 +21,10 @@ target("gatekeeper")
     set_languages("c++11")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp", "src/system_monitor.cpp")
     else
         add_files("src/relay_posix.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp", "src/system_monitor.cpp")
         if is_plat("linux", "android", "cross") then
             add_files("src/relay_linux.cpp")
         end
@@ -91,10 +91,10 @@ target("gatekeeper-systemd")
     set_languages("c++11")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp", "src/system_monitor.cpp")
     else
         add_files("src/relay_posix.cpp")
-        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp")
+        add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/main.cpp", "src/control_server.cpp", "src/system_monitor.cpp")
         if is_plat("linux", "android", "cross") then
             add_files("src/relay_linux.cpp")
         end
@@ -156,6 +156,7 @@ target("test-gatekeeper")
     set_languages("c++11")
     add_files("test/test_main.cpp", "test/test_json.cpp", "test/test_config.cpp", "test/test_relay.cpp", "test/test_retry.cpp", "test/test_tcp_monitor.cpp", "test/test_port_group.cpp", "test/test_control_server.cpp", "test/test_stubs.cpp")
     add_files("test/test_run_command.cpp")
+    add_files("test/test_sysmon.cpp")
     if is_plat("windows", "mingw") then
         add_files("src/relay_win.cpp")
     else
@@ -164,7 +165,7 @@ target("test-gatekeeper")
             add_files("src/relay_linux.cpp")
         end
     end
-    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/control_server.cpp")
+    add_files("src/json.cpp", "src/config.cpp", "src/relay.cpp", "src/tcp_monitor.cpp", "src/port_group.cpp", "src/control_server.cpp", "src/system_monitor.cpp")
     add_includedirs("test", "src")
 
     -- ── POSIX 平台 ──────────────────────────────────────────

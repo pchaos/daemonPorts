@@ -1,0 +1,5 @@
+# Ad-hoc control PIN bypass during swap emergency
+
+Status: accepted
+
+When swap usage exceeds the configured swap threshold (default 50%), the PIN requirement on ad-hoc `/run` commands is waived for the emergency allowlist (`reboot`, `shutdown` by default), configured in the `system_monitor` section. This lets an operator recover a swap-thrashing box from another host without remembering the PIN. Commands are matched by first non-sudo token: a leading `sudo`/`doas` is stripped, then the first token must exactly equal an allowlist entry (`sudo reboot` and `reboot` both hit; `echo reboot` does not). This is a deliberate security weakening: any client able to reach the control port can exhaust swap itself and then reboot/shutdown without a PIN. That DoS surface is accepted; restricting the bypass to loopback was rejected because it defeats the remote-recovery purpose.
