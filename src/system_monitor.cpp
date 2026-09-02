@@ -47,9 +47,9 @@ extern std::mutex g_relaysMutex;
 extern std::vector<std::unique_ptr<PortRelay>> g_relays;
 
 // ══════════════════════════════════════════════════════════════════
-// 平台度量：Linux
+// 平台度量：Linux（仅 __linux__，避免与下方 macOS 块重复定义）
 // ══════════════════════════════════════════════════════════════════
-#ifndef _WIN32
+#ifdef __linux__
 
 static bool linuxCpu(SysMetrics& m) {
     static long long prevIdle = -1, prevTotal = 0;
@@ -148,7 +148,7 @@ long long processRssBytes(pid_t pid) {
     return res * pg;
 }
 
-#endif // _WIN32
+#endif // __linux__
 
 // ══════════════════════════════════════════════════════════════════
 // 平台度量：Windows
@@ -292,8 +292,9 @@ static void darwinMem(SysMetrics& m) {
         m.memUsed = total - m.memAvailable;
         m.memPercent = total>0 ? (double)m.memUsed/(double)total*100.0 : 0.0;
     }
-    // swap via sysctl vm.swapusage
-    struct xsw_usage {
+    // swap via sysctl vm.swapusage（自命名 struct，避免与系统 <sys/sysctl.h> 中的
+    // struct xsw_usage 重定义；字段布局与系统 xsw_usage 一致，sysctlbyname 按 size 写入）
+    struct SwapUsageLocal {
         unsigned long long xsu_total, xsu_used, xsu_avail, xsu_pagesize;
         int xsu_encrypted;
     } xsw;
