@@ -275,11 +275,14 @@ jobs:
           ls -lh build/linux/x86_64/
 
   # ═══════════════════════════════════════════════════════════════════
-  # 自动发版：main 有新版本号时创建 tag + Release（触发下方 publish 附加产物）
+  # 自动发版：main 有新版本号时创建 tag + Release
   # ═══════════════════════════════════════════════════════════════════
   create-release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [linux-amd64, linux-arm64, linux-i386, windows-mingw, windows-msvc, macos, android-arm64, test]
+    outputs:
+      version: v${{ steps.version.outputs.version }}
+      skip: ${{ steps.check.outputs.skip }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -290,15 +293,28 @@ jobs:
           VERSION=$(grep -oP 'GATEKEEPER_VERSION\s*=\s*"\K[^"]+' xmake.lua)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: 版本已发布则跳过
+      - name: 检查 release 是否存在
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} 已存在，跳过自动发版"
+          # 仅 main push 时自动发版；release/dispatch 事件只读检查
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "非 main push，不自动发版"
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            ASSETS=$(gh release view "${TAG}" --json assets -q '.assets | length')
+            if [ "${ASSETS}" -eq 0 ]; then
+              echo "Release ${TAG} 存在但无产物，删除重建"
+              gh release delete "${TAG}" --yes --cleanup-tag
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Release ${TAG} 已存在且有产物，跳过"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -317,11 +333,12 @@ jobs:
           echo "已创建 Release ${TAG}"
 
   # ═══════════════════════════════════════════════════════════════════
-  # 发布：收集所有产物到一个 release
+  # 发布：依赖 create-release 先建后传，收集所有产物附加到 release
   # ═══════════════════════════════════════════════════════════════════
   publish:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.create-release.outputs.skip == 'false')
     needs:
+      - create-release
       - linux-amd64
       - linux-arm64
       - linux-i386
@@ -350,7 +367,9 @@ jobs:
           ls -lh release/
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: release/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event_name == 'release' && github.ref_name || needs.create-release.outputs.version }}"
+          gh release upload "${TAG}" release/* --clobber
+          echo "已上传产物到 ${TAG}"
