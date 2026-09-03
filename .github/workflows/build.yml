@@ -275,6 +275,48 @@ jobs:
           ls -lh build/linux/x86_64/
 
   # ═══════════════════════════════════════════════════════════════════
+  # 自动发版：main 有新版本号时创建 tag + Release（触发下方 publish 附加产物）
+  # ═══════════════════════════════════════════════════════════════════
+  create-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [linux-amd64, linux-arm64, linux-i386, windows-mingw, windows-msvc, macos, android-arm64, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        run: |
+          VERSION=$(grep -oP 'GATEKEEPER_VERSION\s*=\s*"\K[^"]+' xmake.lua)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: 版本已发布则跳过
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在，跳过自动发版"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 创建 tag + Release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+          gh release create "${TAG}" \
+            --target "${{ github.sha }}" \
+            --title "${TAG}" \
+            --generate-notes
+          echo "已创建 Release ${TAG}"
+
+  # ═══════════════════════════════════════════════════════════════════
   # 发布：收集所有产物到一个 release
   # ═══════════════════════════════════════════════════════════════════
   publish:
