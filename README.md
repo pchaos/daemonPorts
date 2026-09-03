@@ -12,6 +12,8 @@
 
 如果需要将 gatekeeper 作为 **SOCKS5 代理服务器**使用，可以使用 **proxy 模式**——gatekeeper 直接监听端口，处理完整的 SOCKS5 握手（支持无认证和 USER/PASS 认证），并将连接转发到指定的 HTTP 后端。
 
+如果端口**已被外部进程占用**（如后端容器由 Docker 端口映射对外服务，`docker-proxy` 抢占了端口），gatekeeper 绑定失败时不会放弃该条目：启用 TCP 监控后，它照常统计端口流量与空闲时间；若该条目配置了 `stop_command`，后端空闲超过 `idle_minutes` 后 gatekeeper 执行关闭命令（如 `docker stop <容器>`）回收外部占用者，端口释放后重新接管。未配置 `stop_command` 时只监控、绝不干预外部进程（详见 [CONFIG.md](CONFIG.md#外部占用回收绑定失败--放弃管理)）。
+
 支持两种工作模式：
 
 - **simple 模式（默认）**：引导 → 释放端口，后端接管。适合单端口单后端场景
@@ -27,6 +29,7 @@
 - **proxy 模式**：SOCKS5 代理服务器，支持无认证 / USER+PASS 认证，转发到 HTTP 后端
 - **控制端口热加载**：通过 HTTP 控制端口运行时热加载配置，支持 Token 认证，无需重启进程
 - **控制端口命令执行（/run）**：白名单预设命令 + 临时命令双通道，临时命令需 Token + PIN 双重认证（常量时间比较，防暴力破解），支持同步 JSON 与 chunked 流式输出
+- **外部占用回收**：端口被外部进程占用（如 `docker-proxy`）时，绑定失败先指数退避重试；配置了 `stop_command` 的条目会转为外部占用监控，空闲超时后执行 `stop_command` 回收端口并重新接管；未配置则只监控不干预（详见 [CONFIG.md](CONFIG.md#外部占用回收绑定失败--放弃管理)）
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
@@ -268,7 +271,7 @@ systemctl restart gatekeeper        # 重启服务
 5. **等待就绪**：不断尝试连接 `listen` 端口，直到成功或超时
 6. **浏览器自动刷新**后，直连后端程序
 7. **自动重启**（可选）：如果 `auto_restart: true`，后端退出后重新监听，下次访问再次引导
-8. **绑定失败重试**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`。端口释放成功或收到 SIGTERM 时停止重试。
+8. **绑定失败重试/外部占用回收**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`；同时启用 TCP 监控且配置了 `stop_command` 时，会转为外部占用监控——空闲超时后执行 `stop_command` 回收端口并重新接管。端口释放成功或收到 SIGTERM 时停止重试（详见 [CONFIG.md](CONFIG.md#外部占用回收绑定失败--放弃管理)）。
 
 ### mixed 模式
 
