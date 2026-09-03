@@ -47,6 +47,10 @@ class PortRelay {
     bool launchOnStart_ = false;
     public:
     std::atomic<pid_t> backendPid_{0};
+    // 端口被外部进程占用时的接管状态（绑定失败 + 配置了 stop_command 时启用）
+    std::atomic<bool> externalOccupied_{false};
+    // 回收接管失败后，本次运行内不再尝试回收外部占用者（重启或 /reload 重新武装）
+    std::atomic<bool> recycleGiveUp_{false};
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
     std::atomic<bool> pendingRemoval_{false};
@@ -83,6 +87,8 @@ class PortRelay {
     int consecutiveBindFailures_ = 0; // consecutive bind failures counter
     static const int LOG_SILENCE_THRESHOLD = 10;
     void logBindFailed();
+    // 绑定失败时采纳端口外部占用者为“外部后端”（需配置 stop_command），返回是否采纳
+    bool tryAdoptExternalOccupant();
 
     // 活跃状态跟踪（由统一监控线程更新）
     std::atomic<time_t> lastActiveTime_{time(nullptr)};
@@ -143,7 +149,7 @@ public:
     void evict();
     void resetForIdle();
     bool autoRestart() const { return autoRestart_; }
-    bool isBackendRunning() const { return backendPid_.load() > 0; }
+    bool isBackendRunning() const { return backendPid_.load() > 0 || externalOccupied_.load(); }
     PortGroup* group() const { return group_; }
     int idleMinutes() const { return idleMinutes_; }
 

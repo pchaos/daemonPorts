@@ -53,6 +53,21 @@ void PortRelay::logBindFailed() {
            + std::to_string(retrySecondsMax_) + " 秒）";
     std::cerr << msg << std::endl;
 }
+// 绑定失败时采纳端口外部占用者为“外部后端”：
+// 仅当配置了 stop_command（回收动作可行）且端口确实被占用时采纳；
+// 此后统一监控线程照常采样流量，空闲超时由 gracefulStop 执行 stop_command 回收。
+bool PortRelay::tryAdoptExternalOccupant() {
+    if (stopCommand_.empty() || recycleGiveUp_.load()) return false;
+    int port = monitorPort();
+    if (port <= 0) return false;
+    if (!isPortBound((uint16_t)port)) return false;
+    externalOccupied_.store(true);
+    consecutiveBindFailures_ = 0;
+    retrySeconds_ = retrySecondsBase_;
+    std::cout << "  [" << name_ << "] 端口被外部进程占用，转入外部占用监控"
+              << "（空闲 " << idleMinutes_ << " 分钟后执行 stop_command 回收）" << std::endl;
+    return true;
+}
 
 static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     auto c = addr.find(':');
@@ -192,6 +207,17 @@ void PortRelay::listenLoop() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
         }
+        // 外部占用监控态：暂停绑定，轮询端口释放后重新接管
+        if (externalOccupied_.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (stop_.load()) break;
+            int port = monitorPort();
+            if (port > 0 && !isPortBound((uint16_t)port)) {
+                std::cout << "  [" << name_ << "] 外部占用者已退出，端口释放，重新接管" << std::endl;
+                externalOccupied_.store(false);
+            }
+            continue;
+        }
         listenFd_.store(createListener());
             if (listenFd_.load() < 0) {
                 if (stop_.load()) break;
@@ -202,6 +228,8 @@ void PortRelay::listenLoop() {
                     std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
                               << " 次绑定失败，后续日志已静默" << std::endl;
                 }
+                // 端口被外部进程占用且配置了 stop_command → 采纳为外部后端，纳入空闲回收
+                if (tryAdoptExternalOccupant()) continue;
 
                 auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
                 while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
@@ -574,6 +602,17 @@ void PortRelay::socks5ListenLoop() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
         }
+        // 外部占用监控态：暂停绑定，轮询端口释放后重新接管
+        if (externalOccupied_.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (stop_.load()) break;
+            int port = monitorPort();
+            if (port > 0 && !isPortBound((uint16_t)port)) {
+                std::cout << "  [" << name_ << "] 外部占用者已退出，端口释放，重新接管" << std::endl;
+                externalOccupied_.store(false);
+            }
+            continue;
+        }
         listenFd_ = createListener();
             if (listenFd_ < 0) {
                 if (stop_.load()) break;
@@ -584,6 +623,8 @@ void PortRelay::socks5ListenLoop() {
                     std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
                               << " 次绑定失败，后续日志已静默" << std::endl;
                 }
+                // 端口被外部进程占用且配置了 stop_command → 采纳为外部后端，纳入空闲回收
+                if (tryAdoptExternalOccupant()) continue;
                 auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
                 while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -840,6 +881,17 @@ void PortRelay::mixedListenLoop() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
         }
+        // 外部占用监控态：暂停绑定，轮询端口释放后重新接管
+        if (externalOccupied_.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (stop_.load()) break;
+            int port = monitorPort();
+            if (port > 0 && !isPortBound((uint16_t)port)) {
+                std::cout << "  [" << name_ << "] 外部占用者已退出，端口释放，重新接管" << std::endl;
+                externalOccupied_.store(false);
+            }
+            continue;
+        }
         listenFd_.store(createListener());
             if (listenFd_.load() < 0) {
                 if (stop_.load()) break;
@@ -850,6 +902,8 @@ void PortRelay::mixedListenLoop() {
                     std::cerr << "  [" << name_ << "] 连续 " << LOG_SILENCE_THRESHOLD
                               << " 次绑定失败，后续日志已静默" << std::endl;
                 }
+                // 端口被外部进程占用且配置了 stop_command → 采纳为外部后端，纳入空闲回收
+                if (tryAdoptExternalOccupant()) continue;
                 auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(retrySeconds_);
                 while (std::chrono::steady_clock::now() < deadline && !stop_.load()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1042,6 +1096,33 @@ void PortRelay::signalStop() {
 
 // Graceful stop implementation
 void PortRelay::gracefulStop() {
+    // 外部占用者回收：执行 stop_command 并验证端口释放；无法接管则本次运行放弃回收
+    if (externalOccupied_.load()) {
+        int port = monitorPort();
+        if (stopCommand_.empty()) {
+            std::cout << "  [" << name_ << "] 外部占用但未配置 stop_command，放弃回收（只监控）" << std::endl;
+            recycleGiveUp_.store(true);
+            externalOccupied_.store(false);
+            return;
+        }
+        std::cout << "  [" << name_ << "] 外部占用空闲回收，执行关闭命令: " << stopCommand_ << std::endl;
+        platform::runCommand(stopCommand_);
+        bool released = (port <= 0);
+        if (port > 0) {
+            for (int i = 0; i < 30; ++i) {
+                if (!isPortBound((uint16_t)port)) { released = true; break; }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+        externalOccupied_.store(false);
+        if (released) {
+            std::cout << "  [" << name_ << "] 端口已释放，接管成功，等待重新监听" << std::endl;
+        } else {
+            std::cout << "  [" << name_ << "] 端口仍被占用，放弃接管（本次运行只监控不回收）" << std::endl;
+            recycleGiveUp_.store(true);
+        }
+        return;
+    }
     if (backendPid_ <= 0) return;
     std::cout << "  [" << name_ << "] 正在关闭后端 (PID=" << backendPid_ << ")" << std::endl;
     if (!stopCommand_.empty()) {
@@ -1067,7 +1148,7 @@ platform::killProcess(backendPid_);
 // 驱逐：停机运行中的后端（simple 走 stop_command/SIGTERM，混合/代理遍历协议后端），
 // 然后 signalStop 关闭监听 → 本次运行内粘性禁用（auto_restart 不会复活，/reload 或重启重新武装）。
 void PortRelay::evict() {
-    if (backendPid_ > 0) {
+    if (backendPid_ > 0 || externalOccupied_.load()) {
         gracefulStop();
     }
     for (auto& b : backends_) {

@@ -409,6 +409,18 @@ TCP 连接监控已启动，轮询间隔 60 秒
 - 后端成功绑定后重置为 `retry_seconds`
 - 收到 SIGTERM 或端口释放成功时停止重试
 
+### 外部占用回收（绑定失败 ≠ 放弃管理）
+
+当端口**绑定失败**（例如端口已被 docker-proxy 等其他进程监听）时，gatekeeper 不会放弃该条目：
+
+- **流量监控照常**：连接采样走内核态 `inet_diag`（netlink），不依赖绑定，绑定失败期间依然统计连接活跃度并更新空闲时间戳
+- **空闲超时照常回收**：若该条目配置了 `stop_command`，空闲超过 `idle_minutes` 后 gatekeeper 执行 `stop_command`（如 `docker stop deeptutor`）尝试停掉外部占用者，然后轮询端口（最多 30 秒）验证是否释放
+  - **端口释放** → gatekeeper 重新绑定接管该端口，之后按需启动后端（`auto_restart: true` 时）
+  - **端口仍被占用** → 放弃接管，本次运行内该条目只监控不回收（不反复执行 `stop_command`；重启进程或 `/reload` 后重新武装）
+- **未配置 `stop_command`** → 只监控不回收，绝不动外部进程
+
+典型场景：后端容器（如 `deeptutor`）由 Docker 端口映射对外服务，`docker-proxy` 占住端口导致 gatekeeper 无法绑定；启用 TCP 监控后，gatekeeper 仍统计该端口流量，容器空闲 `idle_minutes` 后自动执行 `docker stop <容器>` 回收资源。
+
 ---
 
 ## 系统资源监控配置（system_monitor）
@@ -565,7 +577,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
-| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.6"}` |
+| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.7"}` |
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
 | `POST /run` | POST | 执行命令。白名单命令用 `{"name":"..."}` 指定（仅需 Token）；ad-hoc 命令用 `{"command":"...","pin":"..."}`（需 Token+PIN）。支持 `"stream":true` 流式输出 |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |
