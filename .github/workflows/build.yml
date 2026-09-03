@@ -369,12 +369,15 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          # needs 上下文仅 job 级可用，先经 env 传入 run 步骤
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
+          VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          # GitHub 表达式 &&/|| 返回布尔值，不能用三元拼接；按事件分支取 tag
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.ref_name }}"
+          if [ "${EVENT}" = "release" ]; then
+            TAG="${REF}"
           else
-            TAG="${{ needs.create-release.outputs.version }}"
+            TAG="${VERSION}"
           fi
           echo "上传产物到 ${TAG}"
           gh release upload "${TAG}" release/* --clobber
