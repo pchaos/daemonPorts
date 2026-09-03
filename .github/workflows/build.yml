@@ -370,6 +370,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.event_name == 'release' && github.ref_name || needs.create-release.outputs.version }}"
+          # GitHub 表达式 &&/|| 返回布尔值，不能用三元拼接；按事件分支取 tag
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="${{ needs.create-release.outputs.version }}"
+          fi
+          echo "上传产物到 ${TAG}"
           gh release upload "${TAG}" release/* --clobber
-          echo "已上传产物到 ${TAG}"
