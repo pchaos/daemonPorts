@@ -369,6 +369,7 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           # needs 上下文仅 job 级可用，先经 env 传入 run 步骤
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref_name }}
