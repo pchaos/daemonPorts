@@ -382,3 +382,56 @@ jobs:
           fi
           echo "上传产物到 ${TAG}"
           gh release upload "${TAG}" release/* --clobber
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Preview 版：每次 main push 更新 preview tag + Release
+  # 版本号未变时，最新编译产物落到这里；版本号变化时正式 Release 照常发布
+  # ═══════════════════════════════════════════════════════════════════
+  publish-preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - linux-amd64
+      - linux-arm64
+      - linux-i386
+      - windows-mingw
+      - windows-msvc
+      - macos
+      - android-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten & rename artifacts for release
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            platform=$(basename "$dir")
+            find "$dir" -type f | while read f; do
+              fname=$(basename "$f")
+              mv "$f" "release/${platform}-${fname}"
+            done
+          done
+          echo "=== Release assets ==="
+          ls -lh release/
+
+      - name: 更新 preview tag + Release（删除重建，tag 指向最新提交）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="preview"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "删除旧 preview Release"
+            gh release delete "${TAG}" --yes --cleanup-tag
+          fi
+          gh release create "${TAG}" \
+            --target "${{ github.sha }}" \
+            --title "Preview Build (${{ github.sha }})" \
+            --notes "main 分支最新编译产物（版本号未发布时使用）"
+          gh release upload "${TAG}" release/* --clobber
+          echo "已更新 Preview Release ${TAG}"
