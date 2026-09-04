@@ -33,7 +33,7 @@
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
-- **系统资源监控**：可选监控宿主机 CPU/内存（物理 + swap），`/sysinfo`/`/procs` 暴露指标；swap 超阈值可免 PIN 紧急 `reboot`/`shutdown`；物理∧内存双满载持续 15 分钟自动驱逐最闲置后端（详见 [CONFIG.md](CONFIG.md#系统资源监控配置system_monitor)）
+- **系统资源监控**：可选监控宿主机 CPU/内存（物理 + swap），`/sysinfo`/`/procs` 暴露指标；swap 超阈值可免 PIN 紧急 `reboot`/`shutdown`；物理∧内存双满载持续 15 分钟自动驱逐最闲置后端，驱逐后端口**保持监听**、下次连接按需重启（内存/swap 低于配置阈值才拉起，详见 [CONFIG.md](CONFIG.md#系统资源监控配置system_monitor)）
 - **协议无关**：监控和端口接管在 TCP 层运作，HTTP/HTTPS 端口对 gatekeeper 无区别——只认端口号，不看协议。HTTPS 的 TLS 流量不会被解密或检测
 - **端口活跃跟踪**：`hasRecentActivity()` 接口，查询端口是否在最近 N 分钟内有过活跃连接
 - **systemd 集成**：`sd_notify` 精确通知启动完成，支持 `Type=notify`

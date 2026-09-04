@@ -442,7 +442,9 @@ gatekeeper 可监控**整台宿主机**的 CPU 与内存（物理内存 + 虚拟
       "enabled": true,
       "memory_critical": 0.90,
       "swap_critical": 0.90,
-      "sustain_seconds": 900
+      "sustain_seconds": 900,
+      "relaunch_memory_below": 0.60,
+      "relaunch_swap_below": 0.60
     }
   }
 }
@@ -469,6 +471,8 @@ gatekeeper 可监控**整台宿主机**的 CPU 与内存（物理内存 + 虚拟
 | `memory_critical` | float | `0.90` | 物理内存近满载阈值（可配） |
 | `swap_critical` | float | `0.90` | 虚拟内存/swap 近满载阈值（可配） |
 | `sustain_seconds` | int | `900` | 物理 ∧ swap 双满载**持续**此秒数后触发驱逐（默认 15 分钟） |
+| `relaunch_memory_below` | float | `0.60` | 驱逐后允许重新拉起后端的内存占用上限（used/total，低于此值才允许） |
+| `relaunch_swap_below` | float | `0.60` | 驱逐后允许重新拉起后端的 swap 占用上限（低于此值才允许） |
 
 ### 采样行为
 
@@ -513,12 +517,11 @@ gatekeeper 可监控**整台宿主机**的 CPU 与内存（物理内存 + 虚拟
 - 系统无 swap、或采样未启用时**永不进入应急态** → 免密永不生效。
 - 该豁免全局生效（不限回环）。这是**主动接受的安全削弱**：能触达控制端口的客户端可自行打满 swap 后免密 reboot/shutdown（DoS 面）。见 `docs/adr/0001`。
 
-### 自动驱逐（内存兜底动作）
-
 当**物理内存 ∧ 虚拟内存(swap)** 双双超过各自 `memory_critical`/`swap_critical`，并**持续** `sustain_seconds`（默认 15 分钟）后，gatekeeper 自动关闭"端口无数据流量最久"的运行中子配置项，防止系统进入内核 OOM。
 
 - 选型：所有运行中的子配置项里，取 `now − 最近活跃时间` 最大者（即闲置最久）；并列取 RSS 较大者。全活跃时仍驱逐"最不活跃"者（受控驱逐优于失控 OOM）。
-- 驱逐后该端口条目**本次运行内粘性禁用**：`auto_restart` 不会复活它，重启进程或 `/reload` 才重新武装（与 `idle_minutes` 空闲自停——下一次连接即可复活——行为不同）。
+- 驱逐**不会让端口失效**：`evict()` 关闭后端后立即重新监听该端口，下次客户端连接到来时按需重启后端（与 `idle_minutes` 空闲自停同一路径）。与旧版"本次运行内粘性禁用"（重启进程或 `/reload` 才重新武装）行为不同。
+- 拉起闸门：驱逐后的端口遇客户端连接时，若当前物理内存 ≥ `relaunch_memory_below` 或 swap ≥ `relaunch_swap_below`，gatekeeper **暂不启动后端**，向客户端返回 503 "资源不足，暂缓启动"页面并继续监听；资源回落到阈值以下后，下一次连接正常拉起。避免刚腾出的内存立刻被拉起的大后端重新吃满（防止驱逐-拉起循环）。
 - 每次触发最多驱逐一个；若 15 分钟后仍满载，再驱逐下一个最闲置者。
 - 这是保活优先策略：杀最闲置 ≠ 杀最大内存，释放可能较少，收敛是分钟级渐进的。见 `docs/adr/0002`。
 

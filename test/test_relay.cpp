@@ -294,3 +294,32 @@ TEST_CASE("launchAndRelease - 无监听 fd 时安全调用") {
     // 空 command 会 fork 一个 sh 子进程并设置 backendPid_，此处只验证调用不崩溃不阻塞
     relay.launchAndRelease();
 }
+
+TEST_CASE("驱逐后拉起闸门 - evict 置位与资源门槛") {
+    PortConfig cfg;
+    cfg.listenAddr = ":0";
+    cfg.command = "";
+    PortRelay relay(cfg);
+
+    // 驱逐后置位
+    CHECK(relay.evicted_.load() == false);
+    relay.evict();
+    CHECK(relay.evicted_.load() == true);
+    // 驱逐内部会 resetForIdle 重建监听线程，此处清理避免残留
+    relay.signalStop();
+    relay.stop();
+
+    // 资源门槛：阈值压到 1% → 当前内存占用必然超过 → 拒绝拉起
+    g_sysMonConfig.eviction.relaunchMemoryBelow = 0.01;
+    g_sysMonConfig.eviction.relaunchSwapBelow = 0.01;
+    CHECK(relay.relaunchMemoryOk() == false);
+
+    // 阈值拉到 99% → 当前内存占用必然低于 → 允许拉起
+    g_sysMonConfig.eviction.relaunchMemoryBelow = 0.99;
+    g_sysMonConfig.eviction.relaunchSwapBelow = 0.99;
+    CHECK(relay.relaunchMemoryOk() == true);
+
+    // 恢复默认
+    g_sysMonConfig.eviction.relaunchMemoryBelow = 0.60;
+    g_sysMonConfig.eviction.relaunchSwapBelow = 0.60;
+}

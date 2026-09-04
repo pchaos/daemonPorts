@@ -40,8 +40,10 @@ TEST_CASE("parseSystemMonitorConfig - 完整配置") {
     CHECK(g_sysMonConfig.eviction.memoryCritical == doctest::Approx(0.90));
     CHECK(g_sysMonConfig.eviction.swapCritical == doctest::Approx(0.85));
     CHECK(g_sysMonConfig.eviction.sustainSeconds == 900);
+    // relaunch 门槛默认值
+    CHECK(g_sysMonConfig.eviction.relaunchMemoryBelow == doctest::Approx(0.60));
+    CHECK(g_sysMonConfig.eviction.relaunchSwapBelow == doctest::Approx(0.60));
 }
-
 TEST_CASE("parseSystemMonitorConfig - 缺省段用默认值") {
     parseSystemMonitorConfig(R"({"ports":[]})");
     CHECK(g_sysMonConfig.enabled == false);

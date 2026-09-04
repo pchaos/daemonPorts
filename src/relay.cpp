@@ -1,5 +1,6 @@
 #include "relay.h"
 #include "port_group.h"
+#include "system_monitor.h"
 
 #include <iostream>
 #include <cstring>
@@ -195,6 +196,51 @@ std::string PortRelay::buildStartupResponse() const {
         "\r\n"
         + html;
 }
+// 驱逐后拉起闸门：内存与 swap 均低于配置阈值才允许重新启动后端。
+// 读取失败时放行（无法判定资源状态，避免端口永久不可用）。
+bool PortRelay::relaunchMemoryOk() const {
+    SysMetrics m;
+    if (!readSystemMetrics(m)) return true;
+    const EvictionConfig& ec = g_sysMonConfig.eviction;
+    if (m.memPercent >= ec.relaunchMemoryBelow * 100.0) return false;
+    if (m.swapValid && m.swapPercent >= ec.relaunchSwapBelow * 100.0) return false;
+    return true;
+}
+
+void PortRelay::sendResourceBusyPage(int fd) {
+    std::string response = buildResourceBusyResponse();
+    platform::write_fd(fd, response.data(), response.size());
+}
+
+std::string PortRelay::buildResourceBusyResponse() const {
+    std::string html =
+        "<!DOCTYPE html>\n"
+        "<html>\n<head>\n"
+        "  <meta charset=\"utf-8\">\n"
+        "  <meta http-equiv=\"refresh\" content=\""
+        + std::to_string(refreshSeconds_) + "\">\n"
+        "  <title>" + name_ + " 资源不足</title>\n"
+        "  <script>\n"
+        "    var secs = " + std::to_string(refreshSeconds_) + ";\n"
+        "    function tick() {\n"
+        "      document.getElementById('cd').textContent = secs;\n"
+        "      if (secs > 0) { secs--; setTimeout(tick, 1000); }\n"
+        "    }\n"
+        "  </script>\n"
+        "</head>\n<body onload=\"tick()\">\n"
+        "  <h1>" + name_ + " 资源不足，暂缓启动</h1>\n"
+        "  <p>系统内存或交换分区占用过高，服务暂缓启动。</p>\n"
+        "  <p><span id=\"cd\">" + std::to_string(refreshSeconds_) + "</span> 秒后自动重试</p>\n"
+        "</body>\n</html>\n";
+
+    return
+        "HTTP/1.1 503 Service Unavailable\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "Content-Length: " + std::to_string(html.size()) + "\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        + html;
+}
 
 void PortRelay::listenLoop() {
     while (!stop_.load()) {
@@ -259,6 +305,14 @@ void PortRelay::listenLoop() {
                 if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
                 continue;
             }
+            // 驱逐后拉起闸门：资源未恢复时不启动后端，仅返回提示页
+            if (evicted_.load() && !relaunchMemoryOk()) {
+                sendResourceBusyPage(fd);
+                platform::close_fd(fd);
+                std::cout << "  [" << name_ << "] 驱逐后资源未恢复，暂缓启动后端" << std::endl;
+                continue;
+            }
+            evicted_.store(false);  // 资源已恢复，允许本次拉起
 
             sendStartupPage(fd);
             platform::close_fd(fd);
@@ -965,11 +1019,18 @@ void PortRelay::mixedListenLoop() {
                     std::cout << "  [" << name_ << "] " << proto
                               << " 后端未就绪，发送引导响应" << std::endl;
                     sendMixedResponse(fd, proto);
-                    platform::close_fd(fd);
                 }
-                // 不释放端口，继续 accept
             } else {
                 // ── hold_port=false：引导后释放模式 ──
+                // 驱逐后拉起闸门：资源未恢复时不启动后端，继续监听
+                if (evicted_.load() && !relaunchMemoryOk()) {
+                    sendMixedResponse(fd, proto);
+                    platform::close_fd(fd);
+                    std::cout << "  [" << name_ << "] 驱逐后资源未恢复，暂缓启动后端" << std::endl;
+                    continue;
+                }
+                evicted_.store(false);
+
                 sendMixedResponse(fd, proto);
                 platform::close_fd(fd);
 
@@ -1146,8 +1207,10 @@ platform::killProcess(backendPid_);
 }
 
 // 驱逐：停机运行中的后端（simple 走 stop_command/SIGTERM，混合/代理遍历协议后端），
-// 然后 signalStop 关闭监听 → 本次运行内粘性禁用（auto_restart 不会复活，/reload 或重启重新武装）。
+// 然后 signalStop 停掉当前监听/监控线程，再 resetForIdle 重新武装：
+// 端口保持可接管，客户端连接到来时按需再次拉起后端（不做本次运行内粘性禁用）。
 void PortRelay::evict() {
+    evicted_.store(true);
     if (backendPid_ > 0 || externalOccupied_.load()) {
         gracefulStop();
     }
@@ -1158,7 +1221,9 @@ void PortRelay::evict() {
             b.pid = 0;
         }
     }
-    signalStop();   // 关闭监听，条目本次运行内禁用
+    signalStop();
+    resetForIdle();
+    std::cout << "  [" << name_ << "] 驱逐完成，重新监听端口，等待客户端连接按需启动后端" << std::endl;
 }
 
 void PortRelay::resetForIdle() {

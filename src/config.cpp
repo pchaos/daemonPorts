@@ -39,14 +39,18 @@ void parseSystemMonitorConfig(const std::string& json) {
     if (auto* ev = sm->get("eviction")) {
         if (ev->is_obj()) {
             EvictionConfig ec;
-            if (auto* e = ev->get("enabled")) ec.enabled = e->as_bool();
+            if (auto* e2 = ev->get("enabled")) ec.enabled = e2->as_bool();
             if (auto* mc = ev->get("memory_critical")) ec.memoryCritical = mc->as_num();
             if (auto* sc = ev->get("swap_critical")) ec.swapCritical = sc->as_num();
             if (auto* ss = ev->get("sustain_seconds")) ec.sustainSeconds = (int)ss->as_num();
+            if (auto* rb = ev->get("relaunch_memory_below")) ec.relaunchMemoryBelow = rb->as_num();
+            if (auto* rsb = ev->get("relaunch_swap_below")) ec.relaunchSwapBelow = rsb->as_num();
             // 钳制阈值到 (0,1)
             if (ec.memoryCritical <= 0.0 || ec.memoryCritical > 1.0) ec.memoryCritical = 0.90;
             if (ec.swapCritical <= 0.0 || ec.swapCritical > 1.0) ec.swapCritical = 0.90;
             if (ec.sustainSeconds < 1) ec.sustainSeconds = 900;
+            if (ec.relaunchMemoryBelow <= 0.0 || ec.relaunchMemoryBelow > 1.0) ec.relaunchMemoryBelow = 0.60;
+            if (ec.relaunchSwapBelow <= 0.0 || ec.relaunchSwapBelow > 1.0) ec.relaunchSwapBelow = 0.60;
             cfg.eviction = ec;
         }
     }

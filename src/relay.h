@@ -51,6 +51,8 @@ class PortRelay {
     std::atomic<bool> externalOccupied_{false};
     // 回收接管失败后，本次运行内不再尝试回收外部占用者（重启或 /reload 重新武装）
     std::atomic<bool> recycleGiveUp_{false};
+    // 驱逐后重新拉起后端前需满足资源门槛（内存/swap 低于 relaunch* 阈值）
+    std::atomic<bool> evicted_{false};
     int stackSize_ = 256;  // KB
     std::atomic<bool> stop_{false};
     std::atomic<bool> pendingRemoval_{false};
@@ -135,9 +137,11 @@ public:
     void setLaunchOnStart(bool v) { launchOnStart_ = v; }
     void forceReleasePort();
     void clearGroupLaunch();
-
     std::string buildStartupResponse() const;
-
+    // 驱逐后拉起闸门：返回 false 表示资源未恢复，暂缓启动
+    bool relaunchMemoryOk() const;
+    void sendResourceBusyPage(int fd);
+    std::string buildResourceBusyResponse() const;
     void start();
     void signalStop();
     void setPendingRemoval() { pendingRemoval_ = true; signalStop(); }
@@ -145,7 +149,8 @@ public:
     void stop();
 
     void gracefulStop();
-    // 驱逐：关闭运行中的后端（含混合/代理多后端）并对该条目做本次运行内粘性禁用。
+    // 驱逐：关闭运行中的后端（含混合/代理多后端），随后重新武装监听端口，
+    // 客户端连接时按需再次启动后端（不做本次运行内粘性禁用）。
     void evict();
     void resetForIdle();
     bool autoRestart() const { return autoRestart_; }

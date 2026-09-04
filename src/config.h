@@ -88,6 +88,8 @@ struct EvictionConfig {
     double  memoryCritical = 0.90;  // 物理内存近满载阈值
     double  swapCritical = 0.90;    // 虚拟(swap)近满载阈值
     int     sustainSeconds = 900;   // 双满载持续秒数后触发驱逐
+    double  relaunchMemoryBelow = 0.60; // 驱逐后重新拉起后端的内存占用上限（低于此值才允许）
+    double  relaunchSwapBelow = 0.60;   // 驱逐后重新拉起后端的 swap 占用上限（低于此值才允许）
 };
 struct SystemMonitorConfig {
     bool    enabled = false;
