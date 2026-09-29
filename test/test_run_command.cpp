@@ -214,3 +214,15 @@ TEST_CASE("ControlServer - verifyPin returns true for correct PIN") {
     CHECK(!ok);
 }
 
+TEST_CASE("runCommand executes leading VAR=value env assignments") {
+    // Regression: config commands like "DATA_DIR=/x node server.js" previously
+    // failed with ENOENT because execvp treated "DATA_DIR=/x" as the program.
+    int ec = platform::runCommand("GK_TEST_ENV=hello /usr/bin/printenv GK_TEST_ENV");
+    CHECK(ec == 0);
+}
+
+TEST_CASE("runCommand returns 127 for missing program") {
+    int ec = platform::runCommand("GK_TEST_ENV=hello /nonexistent-gk-program-xyz");
+    CHECK(ec == 127);
+}
+

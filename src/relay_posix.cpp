@@ -12,6 +12,8 @@
 #include <signal.h>
 #include <poll.h>
 #include <cerrno>
+#include <cctype>
+#include <cstdlib>
 
 namespace platform {
 
@@ -101,36 +103,69 @@ std::string last_error_str() {
 // Executes the command via execvp() with an argv array — deliberately NO
 // shell is involved, so config-supplied metacharacters (`;`, `|`, `$()`,
 // backticks, redirections) are passed literally and cannot inject commands.
+// Config commands may start with leading VAR=value environment assignments
+// (e.g. "DATA_DIR=/opt/app node server.js"). These are split off and applied
+// to the child environment; otherwise execvp would treat "DATA_DIR=..." as a
+// program name and fail with ENOENT (silently killing every spawned backend).
+static bool isEnvAssign(const std::string& s) {
+    size_t eq = s.find('=');
+    if (eq == std::string::npos || eq == 0) return false;
+    for (size_t i = 0; i < eq; ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!(std::isalnum(c) || c == '_')) return false;
+        if (i == 0 && std::isdigit(c)) return false;
+    }
+    return true;
+}
+
+static void applyEnvAssigns(const std::vector<std::string>& assigns) {
+    for (const auto& a : assigns) {
+        size_t eq = a.find('=');
+        setenv(a.substr(0, eq).c_str(), a.substr(eq + 1).c_str(), 1);
+    }
+}
+
 pid_t launchProcess(const std::string& command) {
     std::vector<std::string> args = parseCommandLine(command);
+    if (args.empty()) return -1;
+    std::vector<std::string> envs;
+    while (!args.empty() && isEnvAssign(args.front())) {
+        envs.push_back(args.front());
+        args.erase(args.begin());
+    }
     if (args.empty()) return -1;
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
     for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
     argv.push_back(nullptr);
-
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        applyEnvAssigns(envs);
         execvp(argv[0], argv.data());
         _exit(127);
     }
     return pid;
 }
-
 // Blocking, shell-free execution (same security model as launchProcess).
 // Returns the child's exit code (0 on success), or -1 if launch failed.
 int runCommand(const std::string& command) {
     std::vector<std::string> args = parseCommandLine(command);
     if (args.empty()) return -1;
+    std::vector<std::string> envs;
+    while (!args.empty() && isEnvAssign(args.front())) {
+        envs.push_back(args.front());
+        args.erase(args.begin());
+    }
+    if (args.empty()) return -1;
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
     for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
     argv.push_back(nullptr);
-
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        applyEnvAssigns(envs);
         execvp(argv[0], argv.data());
         _exit(127);
     }
