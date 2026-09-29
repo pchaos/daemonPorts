@@ -48,7 +48,7 @@ else
 fi
 
 info "安装 service 文件..."
-sudo cp -f gatekeeper.service /etc/systemd/system/
+sudo cp -f "$SCRIPT_DIR/gatekeeper.service" /etc/systemd/system/
 
 info "启动服务..."
 sudo systemctl daemon-reload
