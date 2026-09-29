@@ -47,7 +47,14 @@ NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router
+# 沙箱内必须可写的目录白名单：
+#  - .9router / .dotfiles/bash/.9router：9router 数据
+#  - .nvm / .omniroute：omniroute 二进制与 DATA_DIR（storage.sqlite、logs、server/.pid）
+#  - /root/.config /root/.omniroute：服务以 root 运行时，omniroute 的 HOME 目录；
+#    其定时更新检查会写 $HOME/.config，只读会导致启动 ~55s 后 exit 1（重启循环）
+# 注意：gatekeeper 在沙箱内 spawn 的 omniroute（--daemon）会被 55s 更新检查问题杀死；
+# 推荐像远程部署那样由独立无沙箱单元的 omniroute 占用端口，gatekeeper 自动转入外部占用监控转发。
+ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router /home/user/.nvm /home/user/.omniroute /root/.config /root/.omniroute
 
 # ── 日志（默认走 journald）───────────────────
 StandardOutput=journal
