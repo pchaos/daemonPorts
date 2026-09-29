@@ -23,7 +23,7 @@ class ControlServer {
     // Track streaming threads so they stop on shutdown
     std::mutex streamThreadsMtx_;
     std::vector<PlatformThread> streamThreads_;
-    int listenFd_{-1};
+    std::atomic<int> listenFd_{-1};
     struct RateLimiter {
         std::map<std::string, std::vector<long long>> window;
         std::mutex mtx_;
@@ -58,6 +58,7 @@ public:
         rateLimiter_.windowMs = static_cast<long long>(windowSeconds) * 1000;
     }
     explicit ControlServer(const ControlConfig& cfg);
+    ~ControlServer();
     void start();
     void stop();
     bool isEnabled() const { return !config_.listen.empty(); }

@@ -63,6 +63,11 @@ std::vector<PortConfig> parseConfig(const std::string& json);
 
 // 从文件加载并解析配置
 std::vector<PortConfig> loadConfig(const std::string& path);
+
+// 就地更新 JSON 配置文件中指定 listen 端口条目的 refresh_seconds 字段；
+// 字段缺失时在条目末尾补写。返回是否成功。
+bool updateRefreshSecondsInFile(const std::string& path, const std::string& listenAddr, int seconds);
+
 // Control configuration structs
 struct CommandConfig {
     std::string name;

@@ -4,6 +4,8 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cctype>
+
 
 ControlConfig g_controlConfig;
 SystemMonitorConfig g_sysMonConfig;
@@ -199,4 +201,134 @@ std::vector<PortConfig> loadConfig(const std::string& path) {
     }
     std::stringstream ss; ss << f.rdbuf();
     return parseConfig(ss.str());
+}
+
+// 从 pos（假定为 '"'）前进到 JSON 字符串字面量结束后的位置（闭引号之后）
+static size_t skipJsonString(const std::string& s, size_t pos) {
+    size_t i = pos + 1;
+    while (i < s.size()) {
+        if (s[i] == '\\') { i += 2; continue; }
+        if (s[i] == '"') return i + 1;
+        ++i;
+    }
+    return s.size();
+}
+
+// 就地更新 JSON 配置文件中指定 listen 端口条目的 refresh_seconds 字段；
+// 字段缺失时在条目末尾补写。返回是否成功。
+bool updateRefreshSecondsInFile(const std::string& path, const std::string& listenAddr, int seconds) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        std::cerr << "错误: 无法打开配置文件 " << path << std::endl;
+        return false;
+    }
+    std::stringstream ss; ss << in.rdbuf();
+    std::string text = ss.str();
+    const size_t n = text.size();
+
+    // ── 第一遍：定位目标条目（跳过字符串字面量，跟踪对象深度）──
+    // 根对象 depth=1，端口条目 depth=2；entryOpen 记录最近进入 depth=2 的 '{'。
+    size_t entryOpen = std::string::npos;
+    int depth = 0;
+    size_t i = 0;
+    bool found = false;
+    while (i < n && !found) {
+        char c = text[i];
+        if (c == '"') {
+            size_t after = skipJsonString(text, i);
+            std::string tok = text.substr(i + 1, after - i - 2);
+            if (tok == "listen" && depth == 2 && entryOpen != std::string::npos) {
+                size_t p = after;
+                while (p < n && isspace((unsigned char)text[p])) ++p;
+                if (p < n && text[p] == ':') {
+                    ++p;
+                    while (p < n && isspace((unsigned char)text[p])) ++p;
+                    if (p < n && text[p] == '"') {
+                        size_t vq = p + 1;
+                        while (vq < n) {
+                            if (text[vq] == '\\') { vq += 2; continue; }
+                            if (text[vq] == '"') break;
+                            ++vq;
+                        }
+                        if (vq < n && text.substr(p + 1, vq - p - 1) == listenAddr) found = true;
+                    }
+                }
+            }
+            i = after;
+            continue;
+        }
+        if (c == '{') { ++depth; if (depth == 2) entryOpen = i; ++i; continue; }
+        if (c == '}') { if (depth > 0) --depth; ++i; continue; }
+        ++i;
+    }
+    if (!found || entryOpen == std::string::npos) {
+        std::cerr << "错误: 配置文件 " << path << " 中未找到 listen=" << listenAddr
+                  << " 的条目，刷新延时未持久化" << std::endl;
+        return false;
+    }
+
+    // ── 第二遍：在条目内定位 "refresh_seconds"，找不到则定位条目结束 '}' ──
+    size_t keyPos = std::string::npos;
+    size_t closeBrace = std::string::npos;
+    size_t j = entryOpen + 1;
+    depth = 1;
+    while (j < n) {
+        char c = text[j];
+        if (c == '"') {
+            if (depth == 1 && text.compare(j, 17, "\"refresh_seconds\"") == 0) {
+                keyPos = j;
+                break;
+            }
+            j = skipJsonString(text, j);
+            continue;
+        }
+        if (c == '{') { ++depth; ++j; continue; }
+        if (c == '}') {
+            --depth;
+            if (depth == 0) { closeBrace = j; break; }
+            ++j;
+            continue;
+        }
+        ++j;
+    }
+
+    std::string newVal = std::to_string(seconds);
+    if (keyPos != std::string::npos) {
+        size_t colon = text.find(':', keyPos);
+        if (colon == std::string::npos) return false;
+        size_t vs = colon + 1;
+        while (vs < n && isspace((unsigned char)text[vs])) ++vs;
+        size_t ve = vs;
+        if (ve < n && text[ve] == '-') ++ve;  // 允许负值（≤0 = 停用自动重试）
+        while (ve < n && isdigit((unsigned char)text[ve])) ++ve;
+        if (ve == vs) {
+            std::cerr << "错误: 无法解析 " << path << " 中 refresh_seconds 的值，未持久化" << std::endl;
+            return false;
+        }
+        text.replace(vs, ve - vs, newVal);
+    } else {
+        if (closeBrace == std::string::npos) return false;
+        // 补写字段：沿用条目 '}' 的缩进
+        size_t ls = text.rfind('\n', closeBrace);
+        size_t indentStart = (ls == std::string::npos) ? 0 : ls + 1;
+        size_t indentEnd = indentStart;
+        while (indentEnd < closeBrace && (text[indentEnd] == ' ' || text[indentEnd] == '\t')) ++indentEnd;
+        std::string indent = text.substr(indentStart, indentEnd - indentStart);
+        text.insert(closeBrace, indent + "\"refresh_seconds\": " + newVal + "\n");
+    }
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        std::cerr << "错误: 无法写入配置文件 " << path << std::endl;
+        return false;
+    }
+    out << text;
+    out.close();
+    if (!out.good()) {
+        std::cerr << "错误: 写入配置文件 " << path << " 失败" << std::endl;
+        return false;
+    }
+    std::cout << "已更新 " << path << ": listen=" << listenAddr
+              << " refresh_seconds=" << seconds << std::endl;
+    return true;
 }

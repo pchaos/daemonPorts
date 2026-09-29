@@ -350,6 +350,21 @@ ReloadSummary reloadFromJson(const std::string& json) {
     return reloadConfig(newCfgs);
 }
 
+
+// 运行期调整端口刷新延时：同步内存配置并持久化到配置文件。
+// 由 PortRelay 的内部路由 /__set_refresh 调用。返回是否成功。
+bool persistRefreshSeconds(const std::string& listenAddr, int seconds) {
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto& c : g_currentCfgs)
+            if (c.listenAddr == listenAddr) c.refreshSeconds = seconds;
+    }
+    if (g_configPath.empty() || g_configPath == "-") {
+        std::cerr << "警告: 配置来自 stdin，无法持久化 refresh_seconds" << std::endl;
+        return false;
+    }
+    return updateRefreshSecondsInFile(g_configPath, listenAddr, seconds);
+}
 int main(int argc, char* argv[]) {
     // 先处理 --help/-h/--version（不需要配置文件）
     if (argc >= 2) {

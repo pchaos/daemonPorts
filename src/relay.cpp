@@ -10,6 +10,8 @@
 #include <sstream>
 #include <algorithm>
 #include <thread>
+// 运行期持久化配置（实现在 main.cpp）
+extern bool persistRefreshSeconds(const std::string& listenAddr, int seconds);
 #include <chrono>
 
 // SOCK_CLOEXEC — defined in relay_platform.h (if not available, #define SOCK_CLOEXEC 0)
@@ -168,26 +170,112 @@ void PortRelay::sendStartupPage(int fd) {
     platform::write_fd(fd, response.data(), response.size());
 }
 
-std::string PortRelay::buildStartupResponse() const {
+std::string PortRelay::buildWaitPageHtml(const std::string& title,
+                                         const std::string& heading,
+                                         const std::string& desc) const {
+    int secs = refreshSeconds_.load();
+    bool enabled = secs > 0;
+    std::string metaTag = enabled
+        ? "  <meta http-equiv=\"refresh\" content=\"" + std::to_string(secs) + "\">\n"
+        : "";
+    std::string countdown = enabled
+        ? "  <p id=\"cd\">" + std::to_string(secs) + " 秒后自动重试</p>\n"
+        : "  <p id=\"cd\">自动重试已停用</p>\n";
     std::string html =
         "<!DOCTYPE html>\n"
         "<html>\n<head>\n"
         "  <meta charset=\"utf-8\">\n"
-        "  <meta http-equiv=\"refresh\" content=\""
-        + std::to_string(refreshSeconds_) + "\">\n"
-        "  <title>" + name_ + " 启动中</title>\n"
+        + metaTag
+        + "  <title>" + title + "</title>\n"
         "  <script>\n"
-        "    var secs = " + std::to_string(refreshSeconds_) + ";\n"
+        "    var secs = " + std::to_string(secs) + ";\n"
+        "    var enabled = " + (enabled ? "true" : "false") + ";\n"
+        "    function render() {\n"
+        "      var el = document.getElementById('cd');\n"
+        "      if (!el) return;\n"
+        "      el.textContent = enabled ? secs + ' 秒后自动重试' : '自动重试已停用';\n"
+        "    }\n"
+        "    function setMeta(n) {\n"
+        "      var m = document.querySelector('meta[http-equiv=\"refresh\"]');\n"
+        "      if (!m) { m = document.createElement('meta'); m.setAttribute('http-equiv', 'refresh'); document.head.appendChild(m); }\n"
+        "      m.setAttribute('content', String(n));\n"
+        "    }\n"
+        "    function clearMeta() {\n"
+        "      var m = document.querySelector('meta[http-equiv=\"refresh\"]');\n"
+        "      if (m) m.parentNode.removeChild(m);\n"
+        "    }\n"
         "    function tick() {\n"
-        "      document.getElementById('cd').textContent = secs;\n"
-        "      if (secs > 0) { secs--; setTimeout(tick, 1000); }\n"
+        "      render();\n"
+        "      if (enabled && secs > 0) { secs--; setTimeout(tick, 1000); }\n"
+        "    }\n"
+        "    function setRefresh(n) {\n"
+        "      var tries = 0;\n"
+        "      (function attempt() {\n"
+        "        tries++;\n"
+        "        fetch('/__set_refresh?secs=' + n, {cache: 'no-store'}).then(function(r) { return r.json(); })\n"
+        "        .then(function(j) {\n"
+        "          var st = document.getElementById('st');\n"
+        "          if (j && j.ok) {\n"
+        "            secs = n;\n"
+        "            enabled = n > 0;\n"
+        "            if (enabled) {\n"
+        "              setMeta(n); tick();\n"
+        "              st.textContent = '已调整为 ' + n + ' 秒';\n"
+        "              st.style.color = '#060';\n"
+        "            } else {\n"
+        "              clearMeta(); render();\n"
+        "              st.textContent = '已停用，立即刷新';\n"
+        "              st.style.color = '#060';\n"
+        "              location.reload();\n"
+        "            }\n"
+        "          } else {\n"
+        "            st.textContent = '调整失败';\n"
+        "            st.style.color = '#c00';\n"
+        "          }\n"
+        "        }).catch(function(e) {\n"
+        "          if (tries < 6) {\n"
+        "            // 门卫重监听间隙连接可能被拒,稍后重试\n"
+        "            setTimeout(attempt, 400);\n"
+        "          } else {\n"
+        "            var st = document.getElementById('st');\n"
+        "            st.textContent = '请求失败';\n"
+        "            st.style.color = '#c00';\n"
+        "          }\n"
+        "        });\n"
+        "      })();\n"
+        "    }\n"
+        "    function adjustRefresh(delta) {\n"
+        "      var n = secs + delta;\n"
+        "      if (n > 3600) n = 3600;\n"
+        "      if (n < 0) n = 0;\n"
+        "      if (n === secs) return;\n"
+        "      setRefresh(n);\n"
         "    }\n"
         "  </script>\n"
         "</head>\n<body onload=\"tick()\">\n"
-        "  <h1>" + name_ + " 启动中...</h1>\n"
-        "  <p><span id=\"cd\">" + std::to_string(refreshSeconds_) + "</span> 秒后自动重试</p>\n"
+        "  <h1>" + heading + "</h1>\n"
+        + (desc.empty() ? "" : "  <p>" + desc + "</p>\n")
+        + countdown
+        + "  <div style=\"margin-top:10px\">\n"
+        "    快速调整等待延时:\n"
+        "    <button onclick=\"adjustRefresh(-5)\">-5秒</button>\n"
+        "    <button onclick=\"adjustRefresh(-1)\">-1秒</button>\n"
+        "    <button onclick=\"adjustRefresh(1)\">+1秒</button>\n"
+        "    <button onclick=\"adjustRefresh(5)\">+5秒</button>\n"
+        "    <button onclick=\"setRefresh(1)\">1秒</button>\n"
+        "    <button onclick=\"setRefresh(5)\">5秒</button>\n"
+        "    <button onclick=\"setRefresh(10)\">10秒</button>\n"
+        "    <button onclick=\"setRefresh(30)\">30秒</button>\n"
+        "    <button onclick=\"setRefresh(60)\">60秒</button>\n"
+        "    <button onclick=\"setRefresh(0)\">停用</button>\n"
+        "    <span id=\"st\" style=\"margin-left:8px\"></span>\n"
+        "  </div>\n"
         "</body>\n</html>\n";
+    return html;
+}
 
+std::string PortRelay::buildStartupResponse() const {
+    std::string html = buildWaitPageHtml(name_ + " 启动中", name_ + " 启动中...", "");
     return
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
@@ -195,6 +283,64 @@ std::string PortRelay::buildStartupResponse() const {
         "Connection: close\r\n"
         "\r\n"
         + html;
+}
+// 调整刷新延时：更新运行值并持久化到配置文件。
+// secs ≤ 0 表示停用自动重试（页面立即刷新一次，随后不再自动刷新）。
+bool PortRelay::setRefreshSeconds(int secs) {
+    if (secs > 3600) secs = 3600;
+    if (secs < -3600) secs = -3600;
+    refreshSeconds_.store(secs);
+    bool ok = persistRefreshSeconds(listenAddr_, secs);
+    std::cout << "  [" << name_ << "] 刷新延时调整为 " << secs << " 秒"
+              << (ok ? "，已写入配置文件" : "，配置文件更新失败") << std::endl;
+    return ok;
+}
+
+// 内部路由：浏览器按钮点击 → GET /__set_refresh?secs=N。
+// 命中时更新延时并返回 JSON；未命中返回 false，调用方按常规流程响应。
+bool PortRelay::tryHandleRefreshRequest(int fd) {
+    char buf[256];
+    platform::set_nonblock(fd, 1);
+    ssize_t n = platform::recv_peek_fd(fd, buf, sizeof(buf));
+    if (n <= 0) {
+        // 数据尚未到达：稍候再试一次，避免误判浏览器首次页面加载
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        n = platform::recv_peek_fd(fd, buf, sizeof(buf));
+    }
+    platform::set_nonblock(fd, 0);
+    if (n <= 0) return false;
+
+    std::string req(buf, (size_t)n);
+    const char* prefix = "GET /__set_refresh?secs=";
+    size_t p = req.find(prefix);
+    if (p == std::string::npos) return false;
+    size_t start = p + strlen(prefix);
+    size_t end = start;
+    if (end < req.size() && req[end] == '-') ++end;  // 允许负值（≤0 = 停用自动重试）
+    while (end < req.size() && req[end] >= '0' && req[end] <= '9') ++end;
+    if (end == start || (end == start + 1 && req[start] == '-')) return false;
+    bool neg = false;
+    int secs = 0;
+    for (size_t k = start; k < end; ++k) {
+        if (req[k] == '-') { neg = true; continue; }
+        secs = secs * 10 + (req[k] - '0');
+    }
+    if (neg) secs = -secs;
+    if (secs > 3600) secs = 3600;
+    if (secs < -3600) secs = -3600;
+    bool ok = setRefreshSeconds(secs);
+    std::string body = ok
+        ? "{\"ok\":true,\"refresh_seconds\":" + std::to_string(secs) + "}"
+        : "{\"ok\":false,\"error\":\"persist failed\"}";
+    std::string resp =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        "Content-Length: " + std::to_string(body.size()) + "\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        + body;
+    platform::write_fd(fd, resp.data(), resp.size());
+    return true;
 }
 // 驱逐后拉起闸门：内存与 swap 均低于配置阈值才允许重新启动后端。
 // 读取失败时放行（无法判定资源状态，避免端口永久不可用）。
@@ -213,26 +359,8 @@ void PortRelay::sendResourceBusyPage(int fd) {
 }
 
 std::string PortRelay::buildResourceBusyResponse() const {
-    std::string html =
-        "<!DOCTYPE html>\n"
-        "<html>\n<head>\n"
-        "  <meta charset=\"utf-8\">\n"
-        "  <meta http-equiv=\"refresh\" content=\""
-        + std::to_string(refreshSeconds_) + "\">\n"
-        "  <title>" + name_ + " 资源不足</title>\n"
-        "  <script>\n"
-        "    var secs = " + std::to_string(refreshSeconds_) + ";\n"
-        "    function tick() {\n"
-        "      document.getElementById('cd').textContent = secs;\n"
-        "      if (secs > 0) { secs--; setTimeout(tick, 1000); }\n"
-        "    }\n"
-        "  </script>\n"
-        "</head>\n<body onload=\"tick()\">\n"
-        "  <h1>" + name_ + " 资源不足，暂缓启动</h1>\n"
-        "  <p>系统内存或交换分区占用过高，服务暂缓启动。</p>\n"
-        "  <p><span id=\"cd\">" + std::to_string(refreshSeconds_) + "</span> 秒后自动重试</p>\n"
-        "</body>\n</html>\n";
-
+    std::string html = buildWaitPageHtml(name_ + " 资源不足", name_ + " 资源不足，暂缓启动",
+                                         "系统内存或交换分区占用过高，服务暂缓启动。");
     return
         "HTTP/1.1 503 Service Unavailable\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
@@ -303,6 +431,11 @@ void PortRelay::listenLoop() {
             int fd = platform::accept_fd(listenFd_.load(), (struct sockaddr*)&cli, &len);
             if (fd < 0) {
                 if (stop_.load() || platform::last_error() == PLATFORM_EINVAL) break;
+                continue;
+            }
+            // 内部路由：刷新延时调整请求不视为业务连接，不触发后端启动
+            if (tryHandleRefreshRequest(fd)) {
+                platform::close_fd(fd);
                 continue;
             }
             // 驱逐后拉起闸门：资源未恢复时不启动后端，仅返回提示页
@@ -478,13 +611,13 @@ std::string PortRelay::detectProtocol(int fd) {
 
 // ── mixed 模式：协议对应的引导响应 ──
 // hold_port=false 时，在释放端口前给客户端一个合适的回复：
+//   - unknown: 不做回复，直接关闭连接
 //   - HTTP:   发送启动页 HTML，浏览器自动刷新（复用现有逻辑）
 //   - SOCKS5: 回复 0x05 0xFF（"无可用认证方法"），客户端会报错退出但不崩溃
-//   - SOCKS4: 回复请求被拒绝状态码，客户端会收到明确失败
-//   - unknown: 不做回复，直接关闭连接
-
 void PortRelay::sendMixedResponse(int fd, const std::string& proto) {
     if (proto == "http") {
+        // 内部路由：延时调整请求直接处理，不返回启动页
+        if (tryHandleRefreshRequest(fd)) return;
         sendStartupPage(fd);
     } else if (proto == "socks5") {
         // SOCKS5 方法选择响应：版本 5，不允许任何认证方式
@@ -1121,8 +1254,10 @@ void PortRelay::start() {
 }
 
 void PortRelay::stop() {
-    // Idempotent stop: if already stopping, do nothing
-    if (stop_.exchange(true)) return;
+    // 停止并回收线程。注意:即使 stop_ 已被 signalStop() 置位(如驱逐/挂起
+    // 移除场景),也必须 join 线程,否则线程会访问已析构的对象。
+    // joinThread 幂等:POSIX 忽略 EINVAL,Windows 由 joinable() 保护。
+    stop_.store(true);
     // Close listening socket if open
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
@@ -1130,23 +1265,22 @@ void PortRelay::stop() {
     }
     // Clean up simple / mixed+hold_port=false backend
     if (backendPid_ > 0) {
-if (platform::isChildAlive(backendPid_)) {
-        platform::killProcess(backendPid_);
-    }
+        if (platform::isChildAlive(backendPid_)) {
+            platform::killProcess(backendPid_);
+        }
     }
     // Clean up mixed+hold_port=true multiple backends
     for (auto& b : backends_) {
         if (b.pid > 0) {
-if (platform::isChildAlive(b.pid)) {
-            platform::killProcess(b.pid);
-        }
+            if (platform::isChildAlive(b.pid)) {
+                platform::killProcess(b.pid);
+            }
         }
     }
-if (platform::threadValid(listenThread_)) platform::joinThread(listenThread_);
+    if (platform::threadValid(listenThread_)) platform::joinThread(listenThread_);
     if (platform::threadValid(monitorThread_)) platform::joinThread(monitorThread_);
     if (platform::threadValid(proxyMonitorThread_)) platform::joinThread(proxyMonitorThread_);
 }
-
 void PortRelay::signalStop() {
     stop_.store(true);
     int fd = listenFd_.exchange(-1);

@@ -22,7 +22,7 @@ class PortRelay {
     std::string listenAddr_;
     std::string command_;
     int delayMs_;
-    int refreshSeconds_;
+    std::atomic<int> refreshSeconds_;
     int retrySeconds_;          // 当前重试间隔（会被惩罚机制递增）
     int retrySecondsBase_;      // 初始重试间隔（成功绑定后重置）
     int retrySecondsMax_;       // 最大重试间隔上限
@@ -138,6 +138,15 @@ public:
     void forceReleasePort();
     void clearGroupLaunch();
     std::string buildStartupResponse() const;
+    // 启动/资源不足提示页共享模板（含快速调整延时按钮）
+    std::string buildWaitPageHtml(const std::string& title,
+                                  const std::string& heading,
+                                  const std::string& desc) const;
+    // 调整刷新延时（秒，1..3600），持久化到配置文件；返回是否成功
+    bool setRefreshSeconds(int secs);
+    // 内部路由：GET /__set_refresh?secs=N → 更新延时并返回 JSON；
+    // 命中返回 true（响应已写入 fd），否则返回 false 由调用方按常规流程处理
+    bool tryHandleRefreshRequest(int fd);
     // 驱逐后拉起闸门：返回 false 表示资源未恢复，暂缓启动
     bool relaunchMemoryOk() const;
     void sendResourceBusyPage(int fd);

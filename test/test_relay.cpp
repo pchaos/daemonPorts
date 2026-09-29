@@ -121,6 +121,31 @@ TEST_CASE("buildStartupResponse - HTML 内容") {
     CHECK(resp.find("秒后自动重试") != std::string::npos);
 }
 
+TEST_CASE("buildStartupResponse - 增减微调按钮") {
+    PortConfig cfg;
+    cfg.name = "my-service";
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 5;
+
+    PortRelay relay(cfg);
+    std::string resp = relay.buildStartupResponse();
+
+    // 四个相对微调按钮：-5 / -1 / +1 / +5
+    CHECK(resp.find("onclick=\"adjustRefresh(-5)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"adjustRefresh(-1)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"adjustRefresh(1)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"adjustRefresh(5)\"") != std::string::npos);
+    // 预设绝对值按钮仍在
+    CHECK(resp.find("onclick=\"setRefresh(1)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"setRefresh(60)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"setRefresh(0)\"") != std::string::npos);
+    // adjustRefresh 定义存在，且钳制上下界
+    CHECK(resp.find("function adjustRefresh(delta)") != std::string::npos);
+    CHECK(resp.find("if (n > 3600) n = 3600;") != std::string::npos);
+    CHECK(resp.find("if (n < 0) n = 0;") != std::string::npos);
+}
+
 TEST_CASE("buildStartupResponse - 倒计时脚本") {
     PortConfig cfg;
     cfg.name = "svc";
@@ -132,9 +157,25 @@ TEST_CASE("buildStartupResponse - 倒计时脚本") {
     std::string resp = relay.buildStartupResponse();
 
     CHECK(resp.find("var secs = 5;") != std::string::npos);
+    CHECK(resp.find("var enabled = true;") != std::string::npos);
     CHECK(resp.find("document.getElementById('cd')") != std::string::npos);
     CHECK(resp.find("onload=\"tick()\"") != std::string::npos);
-    CHECK(resp.find("<span id=\"cd\">5</span>") != std::string::npos);
+    CHECK(resp.find("5 秒后自动重试") != std::string::npos);
+}
+
+TEST_CASE("buildStartupResponse - 停用态停用自动刷新") {
+    PortConfig cfg;
+    cfg.name = "svc";
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 0;
+
+    PortRelay relay(cfg);
+    std::string resp = relay.buildStartupResponse();
+
+    CHECK(resp.find("<meta http-equiv=\"refresh\"") == std::string::npos);
+    CHECK(resp.find("自动重试已停用") != std::string::npos);
+    CHECK(resp.find("var enabled = false;") != std::string::npos);
 }
 
 TEST_CASE("buildStartupResponse - Content-Length 精确匹配") {
@@ -305,8 +346,7 @@ TEST_CASE("驱逐后拉起闸门 - evict 置位与资源门槛") {
     CHECK(relay.evicted_.load() == false);
     relay.evict();
     CHECK(relay.evicted_.load() == true);
-    // 驱逐内部会 resetForIdle 重建监听线程，此处清理避免残留
-    relay.signalStop();
+    // 驱逐内部会 resetForIdle 重建监听线程，此处 stop() 回收线程，避免访问已析构对象
     relay.stop();
 
     // 资源门槛：阈值压到 1% → 当前内存占用必然超过 → 拒绝拉起

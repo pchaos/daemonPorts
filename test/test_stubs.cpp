@@ -16,4 +16,7 @@ struct ReloadSummary {
 };
 
 ReloadSummary reloadFromFile() { ReloadSummary s; s.success = false; return s; }
+
+// Stub for relay.cpp's runtime config persistence (defined in main.cpp)
+bool persistRefreshSeconds(const std::string&, int) { return false; }
 ReloadSummary reloadFromJson(const std::string&) { ReloadSummary s; s.success = false; return s; }

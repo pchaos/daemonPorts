@@ -70,11 +70,22 @@ void ControlServer::start() {
     }, this, 256); // small stack is fine for control server
 }
 
+ControlServer::~ControlServer() { stop(); }
+
 void ControlServer::stop() {
     if (stop_.exchange(true)) return;
-    int fd = listenFd_;
+    int fd = listenFd_.load();
     if (fd >= 0) platform::close_fd(fd);
     if (platform::threadValid(thread_)) platform::joinThread(thread_);
+    // 回收流式输出线程:它们引用本对象并检查 stop_,listener 关闭后
+    // 客户端连接断裂,流线程的 write 会立即失败退出,join 不会长期阻塞
+    std::vector<PlatformThread> streams;
+    {
+        std::lock_guard<std::mutex> lk(streamThreadsMtx_);
+        streams.swap(streamThreads_);
+    }
+    for (auto& t : streams)
+        if (platform::threadValid(t)) platform::joinThread(t);
 }
 
 void ControlServer::serverLoop() {
@@ -92,11 +103,10 @@ void ControlServer::serverLoop() {
     if (platform::listen_fd(fd, 128) < 0) { platform::close_fd(fd); return; }
     // Non-blocking listener so accept() returns immediately when no connection
     if (platform::set_nonblock(fd, 1) < 0) { platform::close_fd(fd); return; }
-    listenFd_ = fd;
-    std::cout << "[ControlServer] listening on " << config_.listen << std::endl;
+    listenFd_.store(fd);
     while (!stop_.load()) {
         sockaddr_in cli; int len = sizeof(cli);
-        int client = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
+        int client = platform::accept_fd(listenFd_.load(), (struct sockaddr*)&cli, &len);
         if (client < 0) {
             if (stop_.load() || platform::last_error() == PLATFORM_EINVAL || platform::last_error() == EBADF || platform::last_error() == EAGAIN || platform::last_error() == EWOULDBLOCK) continue;
             continue;
@@ -129,8 +139,7 @@ void ControlServer::serverLoop() {
         }
     }
     // cleanup
-    int lfd = listenFd_; listenFd_ = -1;
-    if (lfd >= 0) platform::close_fd(lfd);
+    int lfd = listenFd_.exchange(-1);
 }
 bool ControlServer::parseHttpRequest(int fd, HttpRequest& req) {
     // read up to 8KB
