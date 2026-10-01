@@ -47,6 +47,14 @@ else
   info "配置文件已存在，跳过"
 fi
 
+# 运行期调整 refresh_seconds 需要写回配置文件：将配置属主改为 service 用户
+# （ProtectSystem=full 下 /usr 只读，故 service 模板还须把该目录加入 ReadWritePaths）。
+SVC_USER="$(sed -n 's/^User=//p' "$SCRIPT_DIR/gatekeeper.service" | head -1)"
+if [ -n "$SVC_USER" ]; then
+  sudo chown "$SVC_USER":"$SVC_USER" /usr/local/etc/gatekeeper/config.json
+  info "配置文件属主已设为 $SVC_USER (可写回 refresh_seconds)"
+fi
+
 info "安装 service 文件..."
 sudo cp -f "$SCRIPT_DIR/gatekeeper.service" /etc/systemd/system/
 

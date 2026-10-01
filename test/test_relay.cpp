@@ -363,3 +363,34 @@ TEST_CASE("驱逐后拉起闸门 - evict 置位与资源门槛") {
     g_sysMonConfig.eviction.relaunchMemoryBelow = 0.60;
     g_sysMonConfig.eviction.relaunchSwapBelow = 0.60;
 }
+TEST_CASE("buildStartupResponse - 等待页回退通道内嵌控制端口信息") {
+    std::string savedToken = g_refreshToken;
+    std::string savedListen = g_controlConfig.listen;
+    g_controlConfig.listen = ":19999";
+    g_refreshToken = "0123456789abcdef0123456789abcdef";
+
+    PortConfig cfg;
+    cfg.name = "svc-1";
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 5;
+
+    PortRelay relay(cfg);
+    std::string resp = relay.buildStartupResponse();
+
+    // ctl 变量携带控制端口、专用令牌、relay 名称与监听地址
+    CHECK(resp.find("var ctl = {port:'19999'") != std::string::npos);
+    CHECK(resp.find("token:'0123456789abcdef0123456789abcdef'") != std::string::npos);
+    CHECK(resp.find("name:'svc-1'") != std::string::npos);
+    CHECK(resp.find("listen:':9999'") != std::string::npos);
+    // 双通道逻辑存在：本地端口失败后走控制端口
+    CHECK(resp.find("__set_refresh?name=' + encodeURIComponent(ctl.name)") != std::string::npos);
+    CHECK(resp.find("function attemptCtl()") != std::string::npos);
+    // 控制端口为空（control 未启用）时不渲染回退 URL 主机部分
+    g_controlConfig.listen.clear();
+    std::string resp2 = relay.buildStartupResponse();
+    CHECK(resp2.find("var ctl = {port:''") != std::string::npos);
+
+    g_controlConfig.listen = savedListen;
+    g_refreshToken = savedToken;
+}

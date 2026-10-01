@@ -15,6 +15,29 @@ extern bool persistRefreshSeconds(const std::string& listenAddr, int seconds);
 #include <chrono>
 
 // SOCK_CLOEXEC — defined in relay_platform.h (if not available, #define SOCK_CLOEXEC 0)
+// 等待页内嵌 JS 字符串转义（relay 名称/监听地址进入单引号字符串字面量）
+static std::string jsStrEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '\'') out += "\\'";
+        else if (c == '"') out += "\\\"";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else out += c;
+    }
+    return out;
+}
+// 从 control 监听地址 (:19999 / 0.0.0.0:19999) 提取端口,供等待页回退通道使用;空则无回退通道
+static std::string controlListenPort(const std::string& listen) {
+    size_t p = listen.rfind(':');
+    if (p == std::string::npos || p + 1 >= listen.size()) return "";
+    for (size_t i = p + 1; i < listen.size(); ++i)
+        if (listen[i] < '0' || listen[i] > '9') return "";
+    return listen.substr(p + 1);
+}
 
 // 检测端口是否还被其他进程监听（不建立连接，不影响空闲超时）
 // 检测端口是否被占用，返回占用进程的 PID（找不到返回 0）
@@ -175,6 +198,7 @@ std::string PortRelay::buildWaitPageHtml(const std::string& title,
                                          const std::string& desc) const {
     int secs = refreshSeconds_.load();
     bool enabled = secs > 0;
+    std::string ctlPort = controlListenPort(g_controlConfig.listen);
     std::string metaTag = enabled
         ? "  <meta http-equiv=\"refresh\" content=\"" + std::to_string(secs) + "\">\n"
         : "";
@@ -190,6 +214,8 @@ std::string PortRelay::buildWaitPageHtml(const std::string& title,
         "  <script>\n"
         "    var secs = " + std::to_string(secs) + ";\n"
         "    var enabled = " + (enabled ? "true" : "false") + ";\n"
+        "    var ctl = {port:'" + ctlPort + "', token:'" + g_refreshToken
+        + "', name:'" + jsStrEscape(name_) + "', listen:'" + jsStrEscape(listenAddr_) + "'};\n"
         "    function render() {\n"
         "      var el = document.getElementById('cd');\n"
         "      if (!el) return;\n"
@@ -209,40 +235,58 @@ std::string PortRelay::buildWaitPageHtml(const std::string& title,
         "      if (enabled && secs > 0) { secs--; setTimeout(tick, 1000); }\n"
         "    }\n"
         "    function setRefresh(n) {\n"
+        "      var st = document.getElementById('st');\n"
         "      var tries = 0;\n"
-        "      (function attempt() {\n"
+        "      var done = false;\n"
+        "      function finish(j) {\n"
+        "        if (done) return;\n"
+        "        done = true;\n"
+        "        if (j && j.ok) {\n"
+        "          secs = n;\n"
+        "          enabled = n > 0;\n"
+        "          if (enabled) {\n"
+        "            setMeta(n); tick();\n"
+        "            st.textContent = '已调整为 ' + n + ' 秒';\n"
+        "            st.style.color = '#060';\n"
+        "          } else {\n"
+        "            clearMeta(); render();\n"
+        "            st.textContent = '已停用，立即刷新';\n"
+        "            st.style.color = '#060';\n"
+        "            location.reload();\n"
+        "          }\n"
+        "        } else {\n"
+        "          st.textContent = '调整失败';\n"
+        "          st.style.color = '#c00';\n"
+        "        }\n"
+        "      }\n"
+        "      function fail() {\n"
+        "        if (done) return;\n"
+        "        done = true;\n"
+        "        st.textContent = '请求失败';\n"
+        "        st.style.color = '#c00';\n"
+        "      }\n"
+        "      function attemptLocal() {\n"
         "        tries++;\n"
-        "        fetch('/__set_refresh?secs=' + n, {cache: 'no-store'}).then(function(r) { return r.json(); })\n"
-        "        .then(function(j) {\n"
-        "          var st = document.getElementById('st');\n"
-        "          if (j && j.ok) {\n"
-        "            secs = n;\n"
-        "            enabled = n > 0;\n"
-        "            if (enabled) {\n"
-        "              setMeta(n); tick();\n"
-        "              st.textContent = '已调整为 ' + n + ' 秒';\n"
-        "              st.style.color = '#060';\n"
-        "            } else {\n"
-        "              clearMeta(); render();\n"
-        "              st.textContent = '已停用，立即刷新';\n"
-        "              st.style.color = '#060';\n"
-        "              location.reload();\n"
-        "            }\n"
-        "          } else {\n"
-        "            st.textContent = '调整失败';\n"
-        "            st.style.color = '#c00';\n"
-        "          }\n"
-        "        }).catch(function(e) {\n"
-        "          if (tries < 6) {\n"
-        "            // 门卫重监听间隙连接可能被拒,稍后重试\n"
-        "            setTimeout(attempt, 400);\n"
-        "          } else {\n"
-        "            var st = document.getElementById('st');\n"
-        "            st.textContent = '请求失败';\n"
-        "            st.style.color = '#c00';\n"
-        "          }\n"
-        "        });\n"
-        "      })();\n"
+        "        fetch('/__set_refresh?secs=' + n, {cache: 'no-store'})\n"
+        "          .then(function(r) { return r.json(); })\n"
+        "          .then(finish)\n"
+        "          .catch(function(e) {\n"
+        "            // 门卫重监听间隙或端口已移交:本端口不可达,重试后改走控制端口专用通道\n"
+        "            if (tries < 3) setTimeout(attemptLocal, 400);\n"
+        "            else attemptCtl();\n"
+        "          });\n"
+        "      }\n"
+        "      function attemptCtl() {\n"
+        "        if (!ctl.port) return fail();\n"
+        "        var url = 'http://' + location.hostname + ':' + ctl.port\n"
+        "          + '/__set_refresh?name=' + encodeURIComponent(ctl.name)\n"
+        "          + '&listen=' + encodeURIComponent(ctl.listen)\n"
+        "          + '&secs=' + n + '&token=' + encodeURIComponent(ctl.token);\n"
+        "        fetch(url, {cache: 'no-store'}).then(function(r) { return r.json(); })\n"
+        "          .then(finish)\n"
+        "          .catch(fail);\n"
+        "      }\n"
+        "      attemptLocal();\n"
         "    }\n"
         "    function adjustRefresh(delta) {\n"
         "      var n = secs + delta;\n"

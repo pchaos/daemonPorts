@@ -85,6 +85,12 @@ private:
     void handleStatus(int fd, const HttpRequest& req);
     void handleSysInfo(int fd, const HttpRequest& req);
     void handleProcs(int fd, const HttpRequest& req);
+    // 等待页专用：GET /__set_refresh?name=&listen=&secs=&token= → 调整 refresh_seconds。
+    // 使用独立能力令牌 g_refreshToken 鉴权（非管理 token），响应带 CORS 头
+    // 供跨端口（等待页 → 控制端口）的 fetch 读取。
+    void handleRefresh(int fd, const HttpRequest& req);
+    // 带 Access-Control-Allow-Origin 的 JSON 响应（跨端口 fetch 可读）
+    void sendCorsJson(int fd, int status, const std::string& body);
     // Returns true when the caller (handleRequest) should close the fd;
     // false when the streaming thread owns the fd and closes it.
     bool handleRun(int fd, const HttpRequest& req);

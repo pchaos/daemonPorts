@@ -5,6 +5,9 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+// 等待页专用的 refresh 调整能力令牌（CSPRNG 生成，仅内嵌在等待页中，
+// 只授权控制端口的 /__set_refresh 路由；不授权任何管理操作）。
+std::string g_refreshToken;
 
 
 ControlConfig g_controlConfig;

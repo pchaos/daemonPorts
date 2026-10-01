@@ -6,6 +6,7 @@
 #include "relay.h"
 #include "system_monitor.h"
 #include <vector>
+#include <cstdlib>
 #include "json.h"
 
 struct ReloadSummary {
@@ -41,6 +42,40 @@ static std::string trim(const std::string& s) {
     return s.substr(start, end-start);
 }
 
+// URL 解码（%XX）与查询串参数提取（供等待页专用 /__set_refresh 路由使用）
+static std::string urlDecode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    auto hexVal = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            int h = hexVal(s[i+1]), l = hexVal(s[i+2]);
+            if (h >= 0 && l >= 0) { out.push_back(static_cast<char>((h << 4) | l)); i += 2; continue; }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+static std::string queryValue(const std::string& path, const std::string& key) {
+    size_t q = path.find('?');
+    if (q == std::string::npos) return "";
+    size_t pos = q + 1;
+    while (pos <= path.size()) {
+        size_t amp = path.find('&', pos);
+        std::string kv = path.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        size_t eq = kv.find('=');
+        std::string k = (eq == std::string::npos) ? kv : kv.substr(0, eq);
+        if (k == key) return urlDecode((eq == std::string::npos) ? std::string() : kv.substr(eq + 1));
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return "";
+}
 // Simple address parser (host:port) – same logic as relay.cpp
 static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
     auto pos = addr.find(':');
@@ -200,6 +235,12 @@ bool ControlServer::handleRequest(int clientFd) {
         sendError(clientFd, 400, "Bad Request");
         return true;
     }
+    // 等待页专用路由：使用独立能力令牌 g_refreshToken 自鉴权，
+    // 不经过管理 token/PIN 校验（该令牌只授权调整 refresh_seconds）。
+    if (req.method == "GET" && (req.path == "/__set_refresh" || req.path.rfind("/__set_refresh?", 0) == 0)) {
+        handleRefresh(clientFd, req);
+        return true;
+    }
     if (!checkAuth(req)) {
         sendError(clientFd, 401, "Unauthorized");
         return true;
@@ -246,6 +287,63 @@ void ControlServer::sendResponse(int fd, int status, const std::string& contentT
 
 void ControlServer::handleVersion(int fd, const HttpRequest&) {
     sendResponse(fd, 200, "application/json", "{\"version\":\"" GATEKEEPER_VERSION "\"}");
+}
+// 等待页专用：GET /__set_refresh?name=&listen=&secs=&token=
+// 独立能力令牌自鉴权 → 找到 relay → setRefreshSeconds（更新内存 + 持久化配置）。
+// 响应带 CORS 头，供等待页（本端口已移交后端时）跨端口 fetch 读取。
+void ControlServer::handleRefresh(int fd, const HttpRequest& req) {
+    std::string token = queryValue(req.path, "token");
+    if (g_refreshToken.empty() || token.empty() || token != g_refreshToken) {
+        sendCorsJson(fd, 401, "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    std::string secsStr = queryValue(req.path, "secs");
+    char* endp = nullptr;
+    long v = std::strtol(secsStr.c_str(), &endp, 10);
+    if (endp == secsStr.c_str() || *endp != '\0') {
+        sendCorsJson(fd, 400, "{\"error\":\"invalid secs\"}");
+        return;
+    }
+    if (v > 3600) v = 3600;
+    if (v < -3600) v = -3600;
+    int secs = static_cast<int>(v);
+
+    std::string listen = queryValue(req.path, "listen");
+    std::string name = queryValue(req.path, "name");
+    PortRelay* relay = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        if (!listen.empty()) {
+            for (auto& r : g_relays)
+                if (r->listenAddr() == listen) { relay = r.get(); break; }
+        }
+        if (!relay && !name.empty()) {
+            for (auto& r : g_relays)
+                if (r->name() == name) { relay = r.get(); break; }
+        }
+    }
+    if (!relay) {
+        sendCorsJson(fd, 404, "{\"error\":\"relay not found\"}");
+        return;
+    }
+    bool ok = relay->setRefreshSeconds(secs);
+    std::string body = ok
+        ? "{\"ok\":true,\"refresh_seconds\":" + std::to_string(secs) + "}"
+        : "{\"ok\":false,\"error\":\"persist failed\"}";
+    sendCorsJson(fd, 200, body);
+}
+void ControlServer::sendCorsJson(int fd, int status, const std::string& body) {
+    std::ostringstream oss;
+    oss << "HTTP/1.1 " << status << " OK\r\n"
+        << "Content-Type: application/json; charset=utf-8\r\n"
+        << "Access-Control-Allow-Origin: *\r\n"
+        << "Cache-Control: no-store\r\n"
+        << "Content-Length: " << body.size() << "\r\n"
+        << "Connection: close\r\n"
+        << "\r\n"
+        << body;
+    std::string resp = oss.str();
+    platform::write_fd(fd, resp.data(), resp.size());
 }
 void ControlServer::sendError(int fd, int status, const std::string& message) {
     std::string body = "{\"error\":\"" + message + "\"}";

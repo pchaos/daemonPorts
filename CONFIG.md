@@ -584,6 +584,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
 | `POST /run` | POST | 执行命令。白名单命令用 `{"name":"..."}` 指定（仅需 Token）；ad-hoc 命令用 `{"command":"...","pin":"..."}`（需 Token+PIN）。支持 `"stream":true` 流式输出 |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |
+| `GET /__set_refresh?name=&listen=&secs=&token=` | GET | **等待页专用**：运行期调整指定端口的 `refresh_seconds`（同等待页「快速调整等待延时」按钮）。使用独立能力令牌 `token` 自鉴权（非管理 token），响应带 `Access-Control-Allow-Origin: *` 供等待页跨端口调用；`secs≤0` 表示停用自动重试 |
 | `POST /config` | POST | 接收请求体中的新配置 JSON 并应用 |
 
 ### 认证
@@ -594,6 +595,15 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 curl -X POST http://127.0.0.1:29999/reload \
   -H "X-Auth-Token: my-secret-token"
 ```
+
+> `GET /__set_refresh` 例外：不使用管理 Token，而使用**专用能力令牌**——每次启动由 CSPRNG
+> 生成、只内嵌在等待页中、只授权该项调整，绝不打印或写入配置。该令牌随等待页公开，攻击面
+> 与等待页本身一致（只能改重试延时，不能执行任何管理操作）。
+
+运行期调整 `refresh_seconds` 需要**写回配置文件**：gatekeeper（systemd `ProtectSystem=full`）
+必须能写 `/usr/local/etc/gatekeeper/config.json`。安装脚本会将该文件属主改为 service 用户，
+service 模板把该目录加入 `ReadWritePaths`；手动部署时需同样处理，否则等待页按钮会报
+`调整失败`（`{"ok":false,"error":"persist failed"}`）。
 
 无认证或 Token 错误时返回 `401 Unauthorized`。
 

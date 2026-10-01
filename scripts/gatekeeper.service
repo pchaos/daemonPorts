@@ -54,7 +54,7 @@ PrivateTmp=yes
 #    其定时更新检查会写 $HOME/.config，只读会导致启动 ~55s 后 exit 1（重启循环）
 # 注意：gatekeeper 在沙箱内 spawn 的 omniroute（--daemon）会被 55s 更新检查问题杀死；
 # 推荐像远程部署那样由独立无沙箱单元的 omniroute 占用端口，gatekeeper 自动转入外部占用监控转发。
-ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router /home/user/.nvm /home/user/.omniroute /root/.config /root/.omniroute
+ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router /home/user/.nvm /home/user/.omniroute /root/.config /root/.omniroute /usr/local/etc/gatekeeper
 
 # ── 日志（默认走 journald）───────────────────
 StandardOutput=journal

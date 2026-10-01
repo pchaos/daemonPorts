@@ -85,6 +85,8 @@ struct ControlConfig {
     int rateLimitSeconds = 60;         // rate limit: window size in seconds
     std::vector<CommandConfig> commands; // whitelisted named command presets
 };
+// 等待页专用的 refresh 调整能力令牌（不同于管理 token，不授权 /reload /run 等管理接口）。
+extern std::string g_refreshToken;
 extern ControlConfig g_controlConfig;
 
 // ── System monitor (系统资源监控) 配置 ──────────────────────────────

@@ -273,6 +273,15 @@ systemctl restart gatekeeper        # 重启服务
 7. **自动重启**（可选）：如果 `auto_restart: true`，后端退出后重新监听，下次访问再次引导
 8. **绑定失败重试/外部占用回收**（可选）：如果 `auto_restart: true` 且端口被占用，gatekeeper 会每隔 `retry_seconds` 秒重试一次。每次失败后重试间隔翻倍（惩罚机制），但最长不超过 `max_retry_seconds`；同时启用 TCP 监控且配置了 `stop_command` 时，会转为外部占用监控——空闲超时后执行 `stop_command` 回收端口并重新接管。端口释放成功或收到 SIGTERM 时停止重试（详见 [CONFIG.md](CONFIG.md#外部占用回收绑定失败--放弃管理)）。
 
+
+**等待页「快速调整等待延时」按钮**：首次访问返回的启动页带有一排延时按钮，可在等待期间
+运行期调整该端口的 `refresh_seconds`（含停用）。按钮为双通道：优先请求本端口
+`/__set_refresh`（门卫仍持有时）；若端口已移交给后端（本端口不可达），自动回退到
+控制端口的 `GET /__set_refresh`（带**专用能力令牌**，只授权该项调整，见
+[CONFIG.md](CONFIG.md#认证)）。调整会写回配置文件，因此 gatekeeper 进程必须能写
+配置文件（`ProtectSystem=full` 下需在 service 的 `ReadWritePaths` 中加入
+`/usr/local/etc/gatekeeper`，安装脚本已处理）。
+
 ### mixed 模式
 
 mixed 模式让一个端口同时支持多种协议（HTTP / SOCKS5 / SOCKS4），**根据 `hold_port` 设置有两种行为**。
