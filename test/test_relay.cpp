@@ -163,6 +163,28 @@ TEST_CASE("buildStartupResponse - 倒计时脚本") {
     CHECK(resp.find("5 秒后自动重试") != std::string::npos);
 }
 
+TEST_CASE("buildStartupResponse - 按钮增减基于配置基准而非剩余倒计时") {
+    PortConfig cfg;
+    cfg.name = "svc";
+    cfg.listenAddr = ":9999";
+    cfg.command = "./app";
+    cfg.refreshSeconds = 30;
+
+    PortRelay relay(cfg);
+    std::string resp = relay.buildStartupResponse();
+
+    // 基准 base 与初始倒计时 secs 同源（配置值），但独立于 tick() 每秒递减的 secs
+    CHECK(resp.find("var secs = 30;") != std::string::npos);
+    CHECK(resp.find("var base = 30;") != std::string::npos);
+    // adjustRefresh 在基准上加 delta：30+1=31，倒计时归零(secs=0)时点击也不会变成 1
+    CHECK(resp.find("var n = base + delta;") != std::string::npos);
+    CHECK(resp.find("var n = secs + delta;") == std::string::npos);
+    CHECK(resp.find("if (n === base) return;") != std::string::npos);
+    // 调整成功后 secs（倒计时）与 base（基准）同步为新绝对值
+    CHECK(resp.find("secs = n;") != std::string::npos);
+    CHECK(resp.find("base = n;") != std::string::npos);
+}
+
 TEST_CASE("buildStartupResponse - 停用态停用自动刷新") {
     PortConfig cfg;
     cfg.name = "svc";
