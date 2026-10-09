@@ -95,23 +95,58 @@ bool PortRelay::tryAdoptExternalOccupant() {
     return true;
 }
 
-static bool parseSockaddr(const std::string& addr, sockaddr_in& out) {
-    auto c = addr.find(':');
-    if (c == std::string::npos) return false;
-    std::string host = addr.substr(0, c);
+// 解析监听/目标地址为 sockaddr_storage。
+// 支持两种形式：
+//   "127.0.0.1:8080" / ":8080"         → IPv4
+//   "[::1]:8080" / "[::]:8080"         → IPv6
+// 返回 family（AF_INET / AF_INET6），失败返回 AF_UNSPEC。
+static sa_family_t parseSockaddr(const std::string& addr, sockaddr_storage& out) {
+    std::string host;
+    std::string portStr;
+    if (!addr.empty() && addr[0] == '[') {
+        auto close = addr.find(']');
+        if (close == std::string::npos) return AF_UNSPEC;
+        host = addr.substr(1, close - 1);
+        if (close + 1 >= addr.size() || addr[close + 1] != ':') return AF_UNSPEC;
+        portStr = addr.substr(close + 2);
+    } else {
+        auto c = addr.rfind(':');
+        if (c == std::string::npos) return AF_UNSPEC;
+        host = addr.substr(0, c);
+        portStr = addr.substr(c + 1);
+    }
     int port = 0;
     try {
-        port = std::stoi(addr.substr(c+1));
-    } catch (...) { return false; }
-    if (port <= 0 || port > 65535) return false;
+        port = std::stoi(portStr);
+    } catch (...) { return AF_UNSPEC; }
+    if (port <= 0 || port > 65535) return AF_UNSPEC;
 
     memset(&out, 0, sizeof(out));
-    out.sin_family = AF_INET;
-    out.sin_port = htons(port);
-    if (host.empty() || host == "0.0.0.0") out.sin_addr.s_addr = INADDR_ANY;
-    else if (host == "localhost" || host == "127.0.0.1") out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    else platform::inet_pton_wrap(AF_INET, host.c_str(), &out.sin_addr);
-    return true;
+    if (host.find(':') != std::string::npos || addr[0] == '[') {
+        // IPv6
+        sockaddr_in6* sa6 = reinterpret_cast<sockaddr_in6*>(&out);
+        sa6->sin6_family = AF_INET6;
+        sa6->sin6_port = htons(port);
+        if (host.empty() || host == "::" || host == "*") {
+            sa6->sin6_addr = in6addr_any;
+        } else if (host == "localhost" || host == "::1") {
+            sa6->sin6_addr = in6addr_loopback;
+        } else {
+            if (platform::inet_pton_wrap(AF_INET6, host.c_str(), &sa6->sin6_addr) != 1) return AF_UNSPEC;
+        }
+        return AF_INET6;
+    } else {
+        // IPv4
+        sockaddr_in* sa = reinterpret_cast<sockaddr_in*>(&out);
+        sa->sin_family = AF_INET;
+        sa->sin_port = htons(port);
+        if (host.empty() || host == "0.0.0.0") sa->sin_addr.s_addr = INADDR_ANY;
+        else if (host == "localhost" || host == "127.0.0.1") sa->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        else {
+            if (platform::inet_pton_wrap(AF_INET, host.c_str(), &sa->sin_addr) != 1) return AF_UNSPEC;
+        }
+        return AF_INET;
+    }
 }
 
 PortRelay::PortRelay(const PortConfig& cfg)
@@ -133,21 +168,23 @@ PortRelay::PortRelay(const PortConfig& cfg)
     , idleMinutes_(cfg.idleMinutes >= 0 ? cfg.idleMinutes : 20)
     , stackSize_(cfg.stackSize > 0 ? cfg.stackSize : 512)
     , tcpMonitorInterval_(cfg.monitor.enabled ? cfg.monitor.intervalSec : 0)
+    , monitorIpv6_(cfg.monitor.ipv6)
     , logDedupMode_(cfg.monitor.logDedup) {}
 
 int PortRelay::createListener() {
-    sockaddr_in sa;
-    if (!parseSockaddr(listenAddr_, sa)) {
+    sockaddr_storage sa;
+    sa_family_t fam = parseSockaddr(listenAddr_, sa);
+    if (fam == AF_UNSPEC) {
         std::cerr << "  [" << name_ << "] 无效地址: " << listenAddr_ << std::endl;
         return -1;
     }
-    int fd = platform::socket_ai(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int fd = platform::socket_ai(fam, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) { std::cerr << "socket: " << platform::last_error_str() << std::endl; return -1; }
     int opt = 1;
     platform::set_sockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        if (platform::bind_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
-            platform::close_fd(fd); return -1;
-        }
+    if (platform::bind_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+        platform::close_fd(fd); return -1;
+    }
     if (platform::listen_fd(fd, 128) < 0) { std::cerr << "listen: " << platform::last_error_str() << std::endl; platform::close_fd(fd); return -1; }
     return fd;
 }
@@ -174,11 +211,12 @@ void PortRelay::launchAndRelease() {
 }
 
 bool PortRelay::waitForBackend(int ms) {
-    sockaddr_in sa;
-    if (!parseSockaddr(listenAddr_, sa)) return false;
+    sockaddr_storage sa;
+    sa_family_t fam = parseSockaddr(listenAddr_, sa);
+    if (fam == AF_UNSPEC) return false;
     auto start = std::chrono::steady_clock::now();
     while (true) {
-        int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
+        int fd = platform::socket_ai(fam, SOCK_STREAM, 0);
         if (fd >= 0) {
             if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) { platform::close_fd(fd); return true; }
             platform::close_fd(fd);
@@ -473,7 +511,7 @@ void PortRelay::listenLoop() {
             launchAndRelease();
         } else {
         while (!stop_.load()) {
-            sockaddr_in cli;
+            sockaddr_storage cli;
             int len = sizeof(cli);
             int fd = platform::accept_fd(listenFd_.load(), (struct sockaddr*)&cli, &len);
             if (fd < 0) {
@@ -698,9 +736,10 @@ static void pipeRelay(int src, int dst, std::atomic<bool>& done) {
 }
 
 int PortRelay::connectToBackend(const std::string& addr) {
-    sockaddr_in sa;
-    if (!parseSockaddr(addr, sa)) return -1;
-    int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
+    sockaddr_storage sa;
+    sa_family_t fam = parseSockaddr(addr, sa);
+    if (fam == AF_UNSPEC) return -1;
+    int fd = platform::socket_ai(fam, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
         platform::close_fd(fd);
@@ -756,11 +795,12 @@ void PortRelay::launchProtocolBackend(BackendState& bs) {
     std::cout << "  [" << name_ << "] " << bs.type << " 后端已启动 (PID=" << pid << ")" << std::endl;
 
     // 等待后端就绪（连接 backend->proxyTo 地址）
-    sockaddr_in sa;
-    if (parseSockaddr(bs.proxyTo, sa)) {
+    sockaddr_storage sa;
+    sa_family_t fam = parseSockaddr(bs.proxyTo, sa);
+    if (fam != AF_UNSPEC) {
         auto start = std::chrono::steady_clock::now();
         while (true) {
-            int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
+            int fd = platform::socket_ai(fam, SOCK_STREAM, 0);
             if (fd >= 0) {
                 if (platform::connect_fd(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
                     platform::close_fd(fd);
@@ -873,7 +913,7 @@ void PortRelay::socks5ListenLoop() {
                   << " (auth=" << auth_.type << ")" << std::endl;
 
         while (!stop_.load()) {
-            sockaddr_in cli;
+            sockaddr_storage cli;
             int len = sizeof(cli);
             int fd = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
             if (fd < 0) {
@@ -1160,7 +1200,7 @@ void PortRelay::mixedListenLoop() {
         } else {
 
         while (!stop_.load()) {
-            sockaddr_in cli;
+            sockaddr_storage cli;
             int len = sizeof(cli);
             int fd = platform::accept_fd(listenFd_, (struct sockaddr*)&cli, &len);
             if (fd < 0) {

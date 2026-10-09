@@ -83,6 +83,9 @@ class PortRelay {
     // TCP 连接监控配置（0=禁用, >0=采样间隔秒）
     int tcpMonitorInterval_ = 0;
 
+    // 是否同时监控 IPv6 连接（默认 true，由 monitor.ipv6 配置覆盖）
+    bool monitorIpv6_ = true;
+
     // 日志去重模式: "skip" | "throttle" | "off"
     std::string logDedupMode_ = "skip";
     int logDedupCounter_ = 0;  // throttle 模式计数器
@@ -176,6 +179,7 @@ public:
     // 供统一监控线程调用
     bool monitorEnabled() const { return tcpMonitorInterval_ > 0; }
     int  monitorIntervalSec() const { return tcpMonitorInterval_; }
+    bool monitorIpv6() const { return monitorIpv6_; }
     int  monitorPort() const;
     const std::string& logDedupMode() const { return logDedupMode_; }
     int& logDedupCounter() { return logDedupCounter_; }

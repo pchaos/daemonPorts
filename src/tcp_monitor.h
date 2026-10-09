@@ -36,8 +36,9 @@ struct TcpSnapshot {
 
 // ── 查询指定端口的 TCP 连接 ──
 // @port: 要查询的端口号（主机字节序，函数内部会转网络字节序）
+// @ipv6: 是否同时查询 IPv6 连接（false = 仅 IPv4）
 // 返回: 匹配该端口的连接列表（srcPort == port || dstPort == port）
-TcpSnapshot queryPortConnections(uint16_t port);
+TcpSnapshot queryPortConnections(uint16_t port, bool ipv6 = true);
 
 // ── TCP 状态码 → 可读字符串 ──
 const char* tcpStateStr(uint8_t state);

@@ -107,7 +107,7 @@ static void queryFamily(int fd, uint16_t port, sa_family_t family, TcpSnapshot& 
     }
 }
 // ── 查询指定端口的 TCP 连接 ──
-TcpSnapshot queryPortConnections(uint16_t port) {
+TcpSnapshot queryPortConnections(uint16_t port, bool ipv6) {
     TcpSnapshot snap;
     auto start = std::clock();
 
@@ -126,9 +126,9 @@ TcpSnapshot queryPortConnections(uint16_t port) {
         return snap;
     }
 
-    // Query both IPv4 and IPv6 families
+    // Query IPv4 and, if enabled, IPv6 families
     queryFamily(fd, port, AF_INET, snap);
-    queryFamily(fd, port, AF_INET6, snap);
+    if (ipv6) queryFamily(fd, port, AF_INET6, snap);
     close(fd);
     snap.elapsedUs = long(double(std::clock() - start) / CLOCKS_PER_SEC * 1e6);
     return snap;
@@ -142,7 +142,7 @@ const char* tcpStateStr(uint8_t) { return "N/A"; }
 
 std::string fmtAddrPort(const struct in6_addr&, uint16_t) { return "N/A"; }
 
-TcpSnapshot queryPortConnections(uint16_t) {
+TcpSnapshot queryPortConnections(uint16_t, bool) {
     TcpSnapshot snap;
     snap.elapsedUs = 0;
     return snap;

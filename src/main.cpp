@@ -107,7 +107,7 @@ static void monitorLoop() {
                 int port = r->monitorPort();
                 if (port <= 0) continue;
 
-                TcpSnapshot cur = queryPortConnections(port);
+                TcpSnapshot cur = queryPortConnections(port, r->monitorIpv6());
                 int nonListen = 0;
                 for (auto& e : cur.entries) {
                     if (e.state != TCP_LISTEN) nonListen++;

@@ -1,6 +1,8 @@
 #include "control_server.h"
 #include <iostream>
 #include <sstream>
+#include <thread>
+#include <chrono>
 #include <algorithm>
 #include <cstdio>
 #include "relay.h"
@@ -143,7 +145,11 @@ void ControlServer::serverLoop() {
         sockaddr_in cli; int len = sizeof(cli);
         int client = platform::accept_fd(listenFd_.load(), (struct sockaddr*)&cli, &len);
         if (client < 0) {
-            if (stop_.load() || platform::last_error() == PLATFORM_EINVAL || platform::last_error() == EBADF || platform::last_error() == EAGAIN || platform::last_error() == EWOULDBLOCK) continue;
+            if (stop_.load()) break;
+            // 非阻塞监听口:无连接时 accept 返回 EAGAIN,休眠再试,避免空转烧 CPU
+            if (platform::last_error() == EAGAIN || platform::last_error() == EWOULDBLOCK) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
             continue;
         }
         try {
