@@ -26,7 +26,7 @@
 |------|------|--------|------|
 | `name` | string | `listen` 值 | 端口名称，用于日志标识和"xxx 启动中"页面 |
 | `enabled` | bool | `true` | 是否启用此端口，设为 `false` 可临时关闭而不删除配置 |
-| `listen` | string | **必填** | 监听地址，格式 `:端口` 或 `IP:端口`，如 `:3000` |
+| `listen` | string | **必填** | 监听地址，见[地址格式与 IPv6 支持](#地址格式与-ipv6-支持) |
 | `mode` | string | `"simple"` | 工作模式：`"simple"` / `"mixed"` / `"proxy"` |
 | `command` | string | - | 启动后端程序的 shell 命令（`hold_port: true` 模式下可选，由协议各自提供） |
 | `stop_command` | string | `""` | 优雅关闭后端的命令，gatekeeper 收到 SIGTERM/SIGINT 时执行 |
@@ -44,6 +44,75 @@
 | `auth` | object | `{}` | `proxy` 模式的认证配置，详见 [认证配置](#认证配置) |
 | `http_target` | string | `""` | `proxy` 模式下 SOCKS5 转发目标地址，如 `"127.0.0.1:8080"` |
 | `monitor` | object | - | TCP 连接监控配置，详见 [TCP 监控配置](#tcp-监控配置) |
+
+---
+## 地址格式与 IPv6 支持
+
+`listen` 字段同时用于监听地址和就绪探测目标地址，地址格式决定 socket 的协议族（family），由 `parseSockaddr` 判定，无独立开关字段。
+
+### 支持的写法
+
+| 写法 | 协议族 | 说明 |
+|------|--------|------|
+| `":3000"` | IPv4 | 监听 `0.0.0.0:3000`，**默认形式** |
+| `"127.0.0.1:3000"` | IPv4 | 监听本机 IPv4 回环 |
+| `"localhost:3000"` | IPv4 | 等价 `127.0.0.1:3000` |
+| `"[::]:3000"` | IPv6 | 监听 `::`（IPv6 通配），**同时接受 IPv4 客户端**（dual-stack） |
+| `"[::1]:3000"` | IPv6 | 监听 IPv6 回环 |
+
+判定规则：字符串以 `[` 开头，或 host 部分含 `:` → IPv6；否则按 IPv4 解析。例外：`localhost` 不带方括号，按 IPv4 处理（等价 `127.0.0.1`）。端口范围 `1-65535`，非法返回错误并跳过该端口。
+
+### 监听 IPv6
+
+```json
+{
+  "ports": [
+    { "listen": "[::]:3000", "command": "./app --port 3000" }
+  ]
+}
+```
+
+### ✅ 一条 `[::]:端口` 即双栈（IPv4 + IPv6 同端口）
+
+`"listen": "[::]:3000"` 会同时接受 IPv4 和 IPv6 客户端，**不需要**为两个协议族声明两条条目。
+
+原理：本机 `net.ipv6.bindv6only` 为 `0`（Linux 默认）时，内核把 `[::]` 监听 socket 作为 dual-stack 处理，IPv4 客户端经 v4-mapped 地址投递到同一 socket。因此单端口即可服务两族流量。
+
+**不要**为同一端口号声明两条条目（`:3000` + `[::]:3000`）——无论哪条先绑定，另一条都会 `bind` 失败：内核视 IPv4 wildcard 已被 `[::]` 覆盖，反之亦然。gatekeeper 会对失败的那条反复报"端口被占用"并退避重试，直到 `max_retry_seconds` 上限。
+
+> ⚠️ 此行为依赖内核值。gatekeeper 调用 `socket()`/`bind()` 后**未**显式 `setsockopt(IPV6_V6ONLY, 0)`。若目标机器把 `net.ipv6.bindv6only` 设为 `1`，`[::]` 将退回纯 IPv6，IPv4 客户端连不上。需在 `/etc/sysctl.conf` 显式固定 `net.ipv6.bindv6only = 0`，或在 `createListener()` 中补上该 socket option 以保证可移植性。
+
+> ⚠️ 监听 IPv6 时**外部占用回收失效**。`findPidUsingPort`（`relay_linux.cpp`）仅读 `/proc/net/tcp`，不含 IPv6 条目。若 `[::]:3000` 被外部进程（如 `docker-proxy`）占用，gatekeeper 只能反复退避重试，不会转入外部占用监控，也不会执行 `stop_command` 回收。见[外部占用回收](#外部占用回收绑定失败--放弃管理)。
+
+### 后端目标地址（`http_target` / `protocols[].proxyTo`）
+
+沿用同一套 `parseSockaddr` 解析，因此同样支持 IPv6：
+
+```json
+{
+  "ports": [
+    {
+      "listen": ":1080",
+      "mode": "proxy",
+      "http_target": "[::1]:8080"
+    }
+  ]
+}
+```
+
+### 控制端口不支持 IPv6
+
+`control.listen` 使用独立的 IPv4-only 解析器（`sockaddr_in`），写 `"[::]:29999"` 会解析失败且不启动控制端口。当前无计划支持。
+
+### TCP 监控的 IPv6
+
+`monitor.ipv6`（默认 `true`）控制的是**连接采样**是否查询 `AF_INET6` 家族，与 `listen` 的协议族相互独立：
+
+- 监听 `[::]:端口`（双栈）→ **必须保持 `monitor.ipv6: true`**（默认即如此）。IPv4 客户端的连接以 v4-mapped 地址出现在 `AF_INET6` 家族下，关掉此项会让采样完全看不到这些连接
+- 监听 `:端口`（纯 IPv4）→ `monitor.ipv6: true` 仍会额外查询该端口的 IPv6 连接，通常为 0 条，无副作用
+- 监听 `[::]:端口` 且 `monitor.ipv6: false` → 采样漏掉**所有**连接（包括 v4-mapped 的 IPv4 流量），`idle_minutes` 空闲超时判定会失效
+
+结论：除非确定目标机器完全没有 IPv6，否则不要关闭 `monitor.ipv6`。
 
 ---
 
@@ -304,7 +373,8 @@ gatekeeper 支持通过 NETLINK_INET_DIAG 实时采样端口的 TCP 连接状态
       "monitor": {
         "enabled": true,
         "interval_seconds": 60,
-        "log_dedup": "skip"
+        "log_dedup": "skip",
+        "ipv6": true
       }
     }
   ]
@@ -316,6 +386,7 @@ gatekeeper 支持通过 NETLINK_INET_DIAG 实时采样端口的 TCP 连接状态
 | `monitor.enabled` | bool | `false` | 是否启用 TCP 连接监控 |
 | `monitor.interval_seconds` | number | `60` | 采样间隔（秒） |
 | `monitor.log_dedup` | string | `"skip"` | 日志去重模式 |
+| `monitor.ipv6` | bool | `true` | 是否同时采样 IPv6 连接（`false` 时仅查 IPv4）。仅影响连接监控，与监听地址无关 |
 
 **日志去重模式说明：**
 
@@ -555,7 +626,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `control.listen` | string | `""` | 控制端口监听地址，如 `":29999"`。为空时不启动控制端口 |
+| `control.listen` | string | `""` | 控制端口监听地址，如 `":29999"`。为空时不启动控制端口。**仅支持 IPv4**，不支持 `[::]:port` 写法 |
 | `control.auth.type` | string | `"none"` | 认证方式：`"none"`（无认证）或 `"token"`（Token 认证） |
 | `control.pin` | string | `""` | 第二重认证 PIN 码（6-8 位）。仅用于 `/run` 接口的执行**未在白名单内**的命令时（ad-hoc），采用**常量时间比较**防时序攻击 |
 | `control.commands` | array | `[]` | 可执行命令白名单，元素为 `{ "name": "标识名", "command": "shell 命令" }`。白名单内的命令通过 `/run` 执行时**只需 Token**，无需 PIN |
