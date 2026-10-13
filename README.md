@@ -32,7 +32,7 @@
 - **外部占用回收**：端口被外部进程占用（如 `docker-proxy`）时，绑定失败先指数退避重试；配置了 `stop_command` 的条目会转为外部占用监控，空闲超时后执行 `stop_command` 回收端口并重新接管；未配置则只监控不干预（详见 [CONFIG.md](CONFIG.md#外部占用回收绑定失败--放弃管理)）
 - **自动重启**：`auto_restart: true` 时后端退出后自动重新启动
 - **绑定失败指数退避重试**：端口被占用时指数退避重试，最长不超过 `max_retry_seconds`
-- **IPv6 支持**：`listen` 支持 `[::]:port` / `[::1]:port`；`"[::]:port"` 同时接受 IPv4 与 IPv6 客户端（dual-stack，内核默认 `bindv6only=0`），一条条目即可覆盖两族；`http_target`/`proxyTo` 同样支持 IPv6 目标地址；连接监控通过 `monitor.ipv6`（默认开启）采样。⚠️ 监听 IPv6 时外部占用回收失效（`findPidUsingPort` 仅查 IPv4）。详见 [CONFIG.md](CONFIG.md#地址格式与-ipv6-支持)
+- **IPv6 支持**：`listen` 支持 `[::]:port` / `[::1]:port`；`"[::]:port"` 同时接受 IPv4 与 IPv6 客户端（dual-stack，内核默认 `bindv6only=0`），一条条目即可覆盖两族；`http_target`/`proxyTo` 同样支持 IPv6 目标地址；连接监控通过 `monitor.ipv6`（默认开启）采样。⚠️ 监听 IPv6 时外部占用回收失效（`findPidUsingPort` 仅查 IPv4）。详见 [CONFIG.md](CONFIG.md#地址格式与-ipv6-支持)。**两族分流**：同端口用具体地址双条目（如 `127.0.0.1:3000` + `[::1]:3000`）可各自挂不同后端，v4/v6 流量分流处理；任一侧为通配地址（`0.0.0.0`/`::`）时同端口双条目会 `bind` 冲突
 - **TCP 连接监控**：通过 NETLINK_INET_DIAG 实时采样端口连接状态，记录活跃时间
 - **系统资源监控**：可选监控宿主机 CPU/内存（物理 + swap），`/sysinfo`/`/procs` 暴露指标；swap 超阈值可免 PIN 紧急 `reboot`/`shutdown`；物理∧内存双满载持续 15 分钟自动驱逐最闲置后端，驱逐后端口**保持监听**、下次连接按需重启（内存/swap 低于配置阈值才拉起，详见 [CONFIG.md](CONFIG.md#系统资源监控配置system_monitor)）
 - **协议无关**：监控和端口接管在 TCP 层运作，HTTP/HTTPS 端口对 gatekeeper 无区别——只认端口号，不看协议。HTTPS 的 TLS 流量不会被解密或检测
@@ -206,6 +206,9 @@ echo '{"ports":[{"listen":":3000","command":"./app"}]}' | ./gatekeeper -
 
 # SOCKS5 代理模式（快速启动）
 echo '{"ports":[{"listen":":1080","mode":"proxy","http_target":"127.0.0.1:8080"}]}' | ./gatekeeper -
+
+# 同时监听 IPv4 + IPv6（dual-stack，单条 [::]:端口 即可，勿再写一条 :端口）
+echo '{"ports":[{"listen":"[::]:3000","command":"./app"}]}' | ./gatekeeper -
 ```
 
 ## systemd 集成
