@@ -1,0 +1,70 @@
+# DaemonPorts Gatekeeper - 多端口启动引导服务
+#
+# 安装:
+#   cp gatekeeper /usr/local/bin/
+#   cp gatekeeper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gatekeeper
+#
+# 编译说明:
+#   默认编译（Type=simple）: xmake
+#   systemd 集成（Type=notify）: xmake f -D HAVE_SYSTEMD=y && xmake
+#
+# 启用 HAVE_SYSTEMD 编译后，将 Type 改为 notify，systemd 会等待
+# gatekeeper 真正接管端口后才返回 "active" 状态。
+
+[Unit]
+Description=DaemonPorts Gatekeeper - 多端口启动引导
+Documentation=https://github.com/your-repo/daemonPorts
+After=network.target
+Wants=network.target
+
+[Service]
+# ── 编译模式 ──────────────────────────────────
+# 没有 -DHAVE_SYSTEMD 编译 → 用 Type=simple
+# 有  -DHAVE_SYSTEMD 编译 → 用 Type=notify
+# ──────────────────────────────────────────────
+Type=notify
+
+# ── 程序路径 ──────────────────────────────────
+# 修改为实际的 gatekeeper 二进制路径
+ExecStart=/usr/local/bin/gatekeeper /usr/local/etc/gatekeeper/config.json
+
+# ── 可选：从 stdin 加载配置 ──────────────────
+# ExecStart=/usr/local/bin/gatekeeper -
+# StandardInput=file:/etc/gatekeeper/config.json
+
+# ── 重启策略 ──────────────────────────────────
+Restart=on-failure
+RestartSec=5s
+
+# ── 停止超时 ───────────────────────────────────
+# gatekeeper 退出时要优雅关闭各端口后端(先 SIGTERM 等 10s 再 SIGKILL),
+# 并 join 监听/监控线程;实测旧版退出流程最坏 142s,默认 90s 不够,
+# 放宽到 150s 覆盖实测上限,避免 stop-sigterm timed out
+TimeoutStopSec=150
+
+# ── 资源限制 ──────────────────────────────────
+LimitNOFILE=65536
+LimitNPROC=1024
+
+# ── 安全加固 ──────────────────────────────────
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+# 沙箱内必须可写的目录白名单：
+#  - .9router / .dotfiles/bash/.9router：9router 数据
+#  - .nvm / .omniroute：omniroute 二进制与 DATA_DIR（storage.sqlite、logs、server/.pid）
+#  -：服务以 root 运行时，omniroute 的 HOME 目录；
+#    其定时更新检查会写 $HOME/.config，只读会导致启动 ~55s 后 exit 1（重启循环）
+# 注意：gatekeeper 在沙箱内 spawn 的 omniroute（--daemon）会被 55s 更新检查问题杀死；
+# 推荐像远程部署那样由独立无沙箱单元的 omniroute 占用端口，gatekeeper 自动转入外部占用监控转发。
+ReadWritePaths=/home/user/.9router /home/user/.nvm /home/user/.omniroute /usr/local/etc/gatekeeper
+
+# ── 日志（默认走 journald）───────────────────
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

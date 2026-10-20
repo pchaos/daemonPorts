@@ -1421,9 +1421,22 @@ if (!platform::isChildAlive(backendPid_)) {
         }
         std::cout << "  [" << name_ << "] 关闭命令超时，发送 SIGTERM" << std::endl;
     }
-    // Fallback SIGTERM
-platform::killProcess(backendPid_);
+    // 优雅终止：先 SIGTERM 给后端清理机会，等待退出；超时未退出再 SIGKILL 兜底
+    platform::termProcess(backendPid_);
     std::cout << "  [" << name_ << "] 已发送 SIGTERM 到后端 (PID=" << backendPid_ << ")" << std::endl;
+    const int kGraceSeconds = 10;
+    for (int i = 0; i < kGraceSeconds; ++i) {
+        if (backendPid_ == 0) return; // monitorBackend may have cleared it
+        if (!platform::isChildAlive(backendPid_)) {
+            std::cout << "  [" << name_ << "] 后端已优雅退出" << std::endl;
+            backendPid_ = 0;
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::cout << "  [" << name_ << "] SIGTERM 后 " << kGraceSeconds
+              << "s 未退出，SIGKILL 兜底 (PID=" << backendPid_ << ")" << std::endl;
+    platform::killProcess(backendPid_);
     backendPid_ = 0;
 }
 

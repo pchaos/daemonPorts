@@ -38,6 +38,12 @@ ExecStart=/usr/local/bin/gatekeeper /usr/local/etc/gatekeeper/config.json
 Restart=on-failure
 RestartSec=5s
 
+# ── 停止超时 ───────────────────────────────────
+# gatekeeper 退出时要优雅关闭各端口后端(先 SIGTERM 等 10s 再 SIGKILL),
+# 并 join 监听/监控线程;实测旧版退出流程最坏 142s,默认 90s 不够,
+# 放宽到 150s 覆盖实测上限,避免 stop-sigterm timed out
+TimeoutStopSec=150
+
 # ── 资源限制 ──────────────────────────────────
 LimitNOFILE=65536
 LimitNPROC=1024
