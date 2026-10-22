@@ -44,6 +44,44 @@
 
 - `5e0f043` feat: add launch_on_start per-port config for immediate backend launch (v1.1.3)
 
+## 修复：停机卡死 — 监听线程 accept() 永不返回 + delayMs 长眠 (v1.1.13, 2026-10-22)
+
+### 现象
+
+每次 `systemctl stop gatekeeper`（及关机）都精确撞满 `TimeoutStopSec`：
+实测 7/7 次 boot，150s/45s 两种配置全部超时 → Fedora 默认 `TimeoutStopFailureMode=abort`
+→ SIGABRT + coredump。机器每次关机多等 2.5 分钟。
+
+### 根因链（coredump 实证）
+
+1. `PortRelay::listenLoop()` 阻塞在 `accept()` 上，而 `stop()`/`signalStop()`
+   只 `close(fd)` —— **Linux 上从另一线程 `close()` 不会唤醒阻塞中的 `accept()`**。
+   线程永不返回 → `pthread_join` 永久卡死。coredump 主线程栈：
+   `pthread_clockjoin_ex ← joinThread ← main 停止序列`，其余线程 1 个卡在
+   `accept()`、多个卡在 `nanosleep`。
+2. 三处 `sleep_for(delayMs_)`（后端退出后等待重启的 35s 窗口）**无 `stop_` 检查**，
+   SIGTERM 时正睡在其中 → join 再卡大半 delayMs。实测修复 1 后仍 57s（omniroute
+   0.3s 就退，gatekeeper 干等 52s）。
+
+### 修复（relay.cpp）
+
+1. `stop()` 与 `signalStop()` 在 `close_fd()` 前先 `shutdown_fd(fd, SHUT_RDWR)`，
+   唤醒阻塞的 `accept()`（accept 循环本就检查 `EINVAL`，只是没人触发）。
+2. `monitorBackend()` 的 `findPidUsingPort` 重试循环加 `stop_`/端口释放早退。
+3. 三处 `sleep_for(delayMs_)` 改为步进等待：**关闭程序时该端口 delay 重置为 1 秒**，
+   其余情况保留原 `delayMs_`；`resetForIdle()` 复位 `stop_`，驱逐行为不受影响。
+
+### 验证
+
+| 阶段 | systemctl stop 耗时 |
+|---|---|
+| 修复前 | 150s 整 + SIGABRT + coredump |
+| 修复 1（accept 唤醒） | 56.9s（不再超时，但卡 delayMs） |
+| 修复 2（delay 重置 1s） | **2.57s**，`Deactivated successfully`，0 timeout 0 abort |
+
+隔离测试同款：v2 卡 32s → v3 0.18s。部署前务必确认装的是 `gatekeeper-systemd`
+变体（`Type=notify` 要求 HAVE_SYSTEMD 编译，见上文"部署检查清单"）。
+
 ## 历史记录
 
 Added missing `<unistd.h>` include to `src/port_group.cpp` to provide declaration for `close()` used when releasing listening sockets. This resolves compilation error during build.

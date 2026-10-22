@@ -558,7 +558,12 @@ void PortRelay::listenLoop() {
 
         // After backend exits, wait delayMs then check if port is still in use
         // by a daemonized child process (e.g., 9router's next-server)
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+        // 关闭程序时该端口 delay 重置为 1 秒:步进 100ms,停机立即醒,避免 join 卡满。
+        const int effectiveDelayMs = stop_.load() ? 1000 : delayMs_;
+        for (int waited = 0; waited < effectiveDelayMs && !stop_.load(); waited += 100) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (stop_.load()) break;
 
         {
             int port = monitorPort();
@@ -644,6 +649,8 @@ void PortRelay::monitorBackend() {
                 int maxRetries = (int)((delayMs_ * 1.5) / 2000);
                 if (maxRetries < 1) maxRetries = 1;
                 for (int retry = 0; retry < maxRetries; retry++) {
+                    if (stop_.load()) break;                     // 停机:立即放弃等待
+                    if (!isPortBound((uint16_t)port)) break;     // 端口已释放:后端已退出
                     realPid = platform::findPidUsingPort((uint16_t)port);
                     if (realPid > 0 && realPid != backendPid_ && realPid != platform::currentPid()) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
@@ -1088,7 +1095,12 @@ while (!stop_.load() && backendPid_ != 0) {
 
         // After backend exits, wait delayMs then check if port is still in use
         // by a daemonized child process (e.g., 9router's next-server)
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+        // 关闭程序时该端口 delay 重置为 1 秒:步进 100ms,停机立即醒,避免 join 卡满。
+        const int effectiveDelayMs = stop_.load() ? 1000 : delayMs_;
+        for (int waited = 0; waited < effectiveDelayMs && !stop_.load(); waited += 100) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (stop_.load()) break;
 
         int port = monitorPort();
         if (port > 0 && isPortBound((uint16_t)port)) {
@@ -1274,7 +1286,12 @@ void PortRelay::mixedListenLoop() {
 
         // After backend exits, wait delayMs then check if port is still in use
         // by a daemonized child process (e.g., 9router's next-server)
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+        // 关闭程序时该端口 delay 重置为 1 秒:步进 100ms,停机立即醒,避免 join 卡满。
+        const int effectiveDelayMs = stop_.load() ? 1000 : delayMs_;
+        for (int waited = 0; waited < effectiveDelayMs && !stop_.load(); waited += 100) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (stop_.load()) break;
 
         {
             int port = monitorPort();
@@ -1348,6 +1365,10 @@ void PortRelay::stop() {
     // Close listening socket if open
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
+        // shutdown() 先于 close():唤醒阻塞在 accept() 上的监听线程
+        // (close() 在 Linux 上不会让 accept() 返回,会导致 joinThread 永久卡死,
+        //  每次停机都撞满 TimeoutStopSec 并被 SIGABRT 强杀)。
+        platform::shutdown_fd(fd, SHUT_RDWR);
         platform::close_fd(fd);
     }
     // Clean up simple / mixed+hold_port=false backend
@@ -1372,6 +1393,9 @@ void PortRelay::signalStop() {
     stop_.store(true);
     int fd = listenFd_.exchange(-1);
     if (fd >= 0) {
+        // 同 stop():shutdown() 唤醒阻塞在 accept() 上的线程,否则驱逐/停止时
+        // joinThread 永久卡死(close() 不中断 accept(),Linux 语义)。
+        platform::shutdown_fd(fd, SHUT_RDWR);
         platform::close_fd(fd);
     }
 }
