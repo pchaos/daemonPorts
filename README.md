@@ -217,17 +217,24 @@ echo '{"ports":[{"listen":"[::]:3000","command":"./app"}]}' | ./gatekeeper -
 
 ### 安装服务文件
 
-项目附带 `gatekeeper.service` 模板，安装步骤：
+推荐用项目自带的安装脚本（自动创建降权用户、设置配置目录属主、安装并启动）：
+
+```bash
+./scripts/install-service.sh   # 可选参数 release|debug，默认 release
+```
+
+手动安装步骤：
 
 ```bash
 # 1. 复制二进制和服务文件
 cp build/linux/x86_64/release/gatekeeper /usr/local/bin/
 cp scripts/gatekeeper.service /etc/systemd/system/
+mkdir -p /usr/local/etc/gatekeeper
 cp gatekeeper-config.json /usr/local/etc/gatekeeper/config.json
 
-# 2. 修改 service 文件中的 ExecStart 路径（如需要）
-#    - 使用 Type=notify（需 HAVE_SYSTEMD 编译）
-#    - 使用 Type=simple（标准编译）
+# 2. 创建降权用户（service 模板 User=gatekeeper 依赖）
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin gatekeeper
+sudo chown -R gatekeeper:gatekeeper /usr/local/etc/gatekeeper
 
 # 3. 启用并启动
 sudo systemctl daemon-reload

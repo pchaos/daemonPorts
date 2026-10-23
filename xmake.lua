@@ -1,5 +1,5 @@
 set_xmakever("2.8.0")
-local GATEKEEPER_VERSION = "1.1.13"
+local GATEKEEPER_VERSION = "1.1.14"
 set_version(GATEKEEPER_VERSION)
 
 -- ============================================================
@@ -196,6 +196,88 @@ target("test-gatekeeper")
             os.exec(target:targetfile())
         end
     end)
+
+target("smoke-n45")
+    -- N4/N5 冒烟: 流式 /run 并发互不干扰 + 超时连组杀孙进程
+    set_kind("binary")
+    set_languages("c++11")
+    add_files("scripts/smoke-n45.cpp")
+    if is_plat("windows", "mingw") then
+        add_files("src/relay_win.cpp")
+    else
+        add_files("src/relay_posix.cpp")
+    end
+    add_includedirs("src")
+    if is_plat("linux", "macosx", "bsd") then
+        add_syslinks("pthread")
+    end
+    -- 仅显式构建, 不进默认构建
+    set_default(false)
+    on_run(function(target)
+        os.exec(target:targetfile())
+    end)
+
+task("smoke")
+    -- 一键跑全部冒烟测试 (N1/N3/N4/N5)
+    on_run(function()
+        import("core.project.config")
+        local plat = config.get("plat") or "native"
+        local arch = config.get("arch") or os.arch()
+        local mode = config.get("mode") or "release"
+        local root = os.projectdir()
+
+        -- 主二进制 (smoke-n1.py / smoke-n3.py 需要)
+        local candidates = {
+            -- after_build 输出格式: build/<plat>/<arch>/gatekeeper
+            path.join(root, "build", plat, arch, "gatekeeper"),
+            path.join(root, "build", "linux", arch, "gatekeeper"),
+            path.join(root, "build", plat, arch, mode, "gatekeeper"),
+        }
+        local bin
+        for _, c in ipairs(candidates) do
+            if os.isfile(c) then bin = c; break end
+        end
+        if not bin then
+            print("未找到 gatekeeper 二进制, 请先构建: xmake f -m release && xmake")
+            os.exit(1)
+        end
+        local bin_mtime = os.mtime(bin)
+        local stale = false
+        for _, s in ipairs(os.files(path.join(root, "src", "*.cpp"))) do
+            if os.mtime(s) > bin_mtime then stale = true; break end
+        end
+        if stale then
+            print("警告: " .. bin .. " 比部分 src/*.cpp 旧, 可能是修复前的二进制!")
+            print("请先重新构建本机版本: xmake f -p linux -a " .. arch .. " -m release -y && xmake build gatekeeper")
+            os.exit(1)
+        end
+        print("使用二进制: " .. bin)
+
+        os.exec("python3 '" .. path.join(root, "scripts", "smoke-n1.py") .. "' '" .. bin .. "'")
+        os.exec("python3 '" .. path.join(root, "scripts", "smoke-n3.py") .. "' '" .. bin .. "'")
+
+        -- smoke-n45: 用本机工具链直接编译运行, 绕过当前平台配置
+        -- (cross/arm64 配置下 xmake build 会产出不可运行的 arm64 二进制)
+        local n45_src = path.join(root, "scripts", "smoke-n45.cpp")
+        local n45_relay = path.join(root, "src", "relay_posix.cpp")
+        local n45_bin = path.join(root, "build", "linux", arch, "release", "smoke-n45")
+        os.mkdir(path.directory(n45_bin))
+        local cxx = os.getenv("CXX") or "g++"
+        local ok = os.execv(cxx, {
+            "-std=c++11", "-O1", "-pthread",
+            "-I" .. path.join(root, "src"),
+            n45_src, n45_relay, "-o", n45_bin,
+        })
+        if not ok then
+            print("编译 smoke-n45 失败")
+            os.exit(1)
+        end
+        os.exec(n45_bin)
+    end)
+    set_menu {
+        usage = "xmake smoke",
+        description = "运行全部安全修复冒烟测试 (N1/N3/N4/N5)"
+    }
 
 -- ── 自定义配置提示 ──────────────────────────────────────────
 task("show-config")

@@ -185,3 +185,42 @@
 | M4 | RateLimiter 加 LRU 淘汰或定期清理过期条目 | 1 天 |
 | M5 | 添加 `SIGCHLD` handler（`SA_NOCLDSTOP` + `SIG_IGN` 自动回收，或 `waitpid` 循环） | 半天 |
 | M6 | 添加 `poll()`/`select()` 超时机制，或使用线程池处理连接 | 2 天 |
+
+---
+
+## 2026-10-22 复查: 修复状态 (v1.1.13, commit c0a4bc5)
+
+| ID | 状态 | 说明 |
+|----|------|------|
+| C1 | ✅ 已修 | `config.h` 默认 `auth.type="token"`; 无 token 时启动拒绝并提示 (main.cpp) |
+| C2 | ✅ 已修 | `POST /config` 需过 `checkAuth`; /run 需 token(+PIN 或应急免密) |
+| C3 | ✅ 已修 | `RateLimiter` 已加 `std::mutex` (control_server.h) |
+| H1 | ✅ 已修 | `launchProcess` 用 `execvp(argv)` 数组传参, 无 shell 解释 (relay_posix.cpp) |
+| H2 | ✅ 已修 | `scripts/gatekeeper.service` 加 `User=gatekeeper`; install-service.sh 自动建用户并 chown 配置目录; 低端口需自行开 `AmbientCapabilities=CAP_NET_BIND_SERVICE` |
+| H5 | ✅ 已修 | 信号处理器仅置 `atomic<bool>` 标志 (main.cpp handleSignal) |
+| M1 | ✅ 已修 | `monitorPort`/`parseSockaddr` 等 `stoi`/`stod` 均包 try/catch |
+| M3 | ⚠️ 未修 | 控制端仍默认绑定 `0.0.0.0`; 启动时有"控制端口绑定在所有网卡"告警, 部署时应改 `127.0.0.1:29999` |
+| M4 | ⚠️ 未修 | RateLimiter 无 LRU/清理, 远 IP 条目持续累积 (低内存风险) |
+| M5 | ✅ 已修 | 子进程由 `monitorBackend` 的 `waitpid` 回收; 无 SIGCHLD handler 但功能等价 |
+| M6 | ✅ 已修 | 控制端接入 `set_recv_timeout(client, 15)`; 流量转发有 50ms 轮询退出 |
+
+
+> **冒烟测试入口**: 先构建本机版本 (`xmake f -p linux -a x86_64 -m release -y && xmake build gatekeeper`),
+> 再一键运行全部安全修复冒烟: `xmake smoke` (N1/N3/N4/N5, 失败即非零退出)。
+> 单独运行: `scripts/smoke-n1.py [bin]`、`scripts/smoke-n3.py [bin]`、`scripts/smoke-n45.cpp`(g++ 编译)。
+
+### 本次审计新发现 (v1.1.13)
+| 等级 | ID | 位置 | 问题 |
+|------|----|------|------|
+| 🔴 CRITICAL | N1 | relay.cpp:951-956 | ~~SOCKS5 协商: 配置 `userpass` 但客户端仅提供 NO_AUTH 时, 落入 `else if (hasNoAuth)` 直接放行 → 认证绕过~~ **已修复 (2026-10-22)**: 免密分支加 `auth_.type != "userpass"` 条件; 冒烟 `scripts/smoke-n1.py` 三用例通过 (NO_AUTH 拒/正确凭证过/错误密码拒) |
+| 🟠 HIGH | N2 | relay.cpp socks5ListenLoop/mixedListenLoop | 代理/混合模式隧道在 accept 循环内同步等待 (`while (!done1&&!done2) sleep(50ms)`), 单连接串行 → 一个长连接阻塞整端口 accept 循环 → DoS |
+| 🟠 HIGH | N3 | system_monitor.cpp maybeEvict | ~~驱逐在 `g_relaysMutex` 持锁下调用 `victim->evict()` → `gracefulStop()` 执行 stop_command + 30×1s 轮询 + SIGTERM 10s, 最长 ~40s 阻塞全进程~~ **已修复 (2026-10-22)**: 锁内选出 victim 并移出 g_relays, 锁外执行 evict, 完成后锁内放回(若被热加载替换则弃用) |
+| 🟠 HIGH | N4 | relay_posix.cpp runShellStream | ~~流式 /run 用进程级全局 `g_streamChildPid`/`g_streamPipeRd` + `signal(SIGALRM)` → 并发流式请求互相覆盖, 超时 handler 可能杀错子进程~~ **已修复 (2026-10-22)**: 删除全局量与 SIGALRM, 改用 per-call 局部状态 + poll 超时 (与 runShellCommand 同模式); 冒烟 `scripts/smoke-n45.cpp` 并发双流式互不干扰 |
+| 🟠 HIGH | N5 | relay_posix.cpp runShellCommand/runShellStream | ~~超时 `kill(pid)` 只杀 `/bin/sh`, 子进程组 (setpgid 未用) 幸存成孤儿~~ **已修复 (2026-10-22)**: 子进程 `setpgid(0,0)` 独立成组, 超时/中断/EOF 后 `kill(-pid)` 连组杀; 冒烟验证孙进程 (`sleep 6241 &`) 超时后 DEAD |
+| 🟡 MED | N6 | control_server.h:19-22 | `pinCooldown_` 声明从未使用 → PIN 无冷却/锁死, 弱 PIN 可暴力 (rate limit 部分缓解) |
+| 🟡 MED | N7 | control_server.cpp handleRefresh | `/__set_refresh` 用内嵌在公开等待页 HTML 的 refresh token 鉴权且可写回配置文件 → 任意访客可改 refresh_seconds 并改写配置文件 (仅限该字段, 不可提权) |
+| 🟡 MED | N8 | config.cpp updateRefreshSecondsInFile | 无原子写 (直接 truncate 原文件, 无临时+rename+fsync), 崩溃/断电可损坏配置 |
+| 🟡 MED | N9 | control_server.cpp parseHttpRequest | `Content-Length` 无上限校验, 配合 15s recv timeout 可灌入大 body (slow-body DoS) |
+| 🟢 LOW | N10 | main.cpp configsEqual | 未比较 `protocols`/`auth`/`monitor.ipv6` → 热加载改这些字段不生效 (需重启) |
+| 🟢 LOW | N11 | json.cpp | 递归解析无深度上限, 恶意深嵌套 /config body 可栈溢出 (需 token) |
+| 🟢 LOW | N12 | relay.cpp detectProtocol | IPv6-only 监听端口上 `isPortBound` 只查 IPv4 族 → 外部占用检测失效 for v6 |

@@ -357,17 +357,28 @@ static void sleepSecs(int n, const std::atomic<bool>& stop) {
 }
 
 bool SystemMonitor::maybeEvict(double memPct, double swapPct) {
-    std::lock_guard<std::mutex> lock(g_relaysMutex);
-    PortRelay* victim = nullptr;
+    // 锁内:选出 victim 并移出 g_relays(驱逐要执行 stop_command、轮询端口释放、
+    // SIGTERM 宽限, 最长耗时数十秒; 若在全局锁内执行会冻结控制接口/热加载/监控
+    // 线程, 见 AUDIT_SECURITY.md N3)
+    std::unique_ptr<PortRelay> victim;
     long long bestIdle = -1, bestRss = -1;
     time_t now = time(nullptr);
-    for (auto& r : g_relays) {
-        if (!r->isBackendRunning()) continue;
-        long long idle = (long long)(now - r->lastActiveTime_.load());
-        if (idle < 0) idle = 0;
-        long long rss = processRssBytes(r->backendPid_);
-        if (idle > bestIdle || (idle == bestIdle && rss > bestRss)) {
-            bestIdle = idle; bestRss = rss; victim = r.get();
+    size_t victimIdx = SIZE_MAX;
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (size_t i = 0; i < g_relays.size(); ++i) {
+            PortRelay* r = g_relays[i].get();
+            if (!r->isBackendRunning()) continue;
+            long long idle = (long long)(now - r->lastActiveTime_.load());
+            if (idle < 0) idle = 0;
+            long long rss = processRssBytes(r->backendPid_);
+            if (idle > bestIdle || (idle == bestIdle && rss > bestRss)) {
+                bestIdle = idle; bestRss = rss; victimIdx = i;
+            }
+        }
+        if (victimIdx != SIZE_MAX) {
+            victim = std::move(g_relays[victimIdx]);
+            g_relays.erase(g_relays.begin() + (long)victimIdx);
         }
     }
     if (!victim) {
@@ -377,7 +388,19 @@ bool SystemMonitor::maybeEvict(double memPct, double swapPct) {
     std::cout << "[SysMonitor] 驱逐 [" << victim->name() << "] 无流量 " << bestIdle
               << "s (RSS=" << bytes(bestRss) << ") mem=" << pct(memPct, true)
               << "% swap=" << pct(swapPct, true) << "%" << std::endl;
+    // 锁外驱逐:stop_command + 端口轮询 + SIGTERM/SIGKILL 全程不持全局锁
     victim->evict();
+    // 锁内放回。若驱逐期间热加载已创建了同地址 relay, 丢弃旧实例避免双 relay 抢端口
+    std::lock_guard<std::mutex> lock(g_relaysMutex);
+    for (auto& r : g_relays) {
+        if (r->listenAddr() == victim->listenAddr()) {
+            std::cout << "[SysMonitor] 驱逐期间 [" << victim->name()
+                      << "] 已被热加载替换, 丢弃旧实例" << std::endl;
+            victim->stop();  // 停线程后再析构, 避免线程泄漏
+            return true;
+        }
+    }
+    g_relays.push_back(std::move(victim));
     return true;
 }
 

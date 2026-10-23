@@ -180,12 +180,6 @@ int runCommand(const std::string& command) {
 // Unlike runCommand/launchProcess, the caller is authenticated (token+PIN),
 // so shell power is the desired capability, not an injection vector.
 
-static pid_t g_streamChildPid = 0;
-static PlatformHandle g_streamPipeRd = -1;
-static void streamTimeoutHandler(int) {
-    if (g_streamChildPid > 0) { ::kill(g_streamChildPid, SIGKILL); g_streamChildPid = 0; }
-    if (g_streamPipeRd >= 0) { ::close(g_streamPipeRd); g_streamPipeRd = -1; }
-}
 
 int runShellCommand(const std::string& command, int timeoutMs,
                      int maxOutputBytes, std::string& output) {
@@ -243,6 +237,9 @@ int runShellStream(const std::string& command, PlatformHandle socket,
     pid_t pid = ::fork();
     if (pid < 0) { ::close(pipefd[0]); ::close(pipefd[1]); return -1; }
     if (pid == 0) {
+        // 子进程放入独立进程组: 超时/中断时可连组一起杀,
+        // 避免只杀 /bin/sh 而遗留其派生的孙进程 (N5)
+        ::setpgid(0, 0);
         ::close(pipefd[0]);
         ::dup2(pipefd[1], STDOUT_FILENO);
         ::dup2(pipefd[1], STDERR_FILENO);
@@ -250,14 +247,28 @@ int runShellStream(const std::string& command, PlatformHandle socket,
         ::execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
         _exit(127);
     }
+    // 父进程侧也设定进程组(竞态保护: 双方都调用, 幂等)
+    ::setpgid(pid, pid);
     ::close(pipefd[1]);
-    g_streamChildPid = pid;
-    g_streamPipeRd = pipefd[0];
-    auto oldAlarm = ::signal(SIGALRM, streamTimeoutHandler);
-    ::alarm(std::max(1, timeoutMs / 1000));
+    auto deadline = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(timeoutMs);
     int exitCode = -2;  // assume timeout
+    bool timedOut = false;
+    bool eof = false;
     char buf[4096];
-    while (!stop.load()) {
+    // 每个请求完全独立: 局部状态 + poll 超时, 无进程级全局变量/SIGALRM (N4)
+    while (!stop.load() && !eof) {
+        auto now = std::chrono::steady_clock::now();
+        int remaining = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                            deadline - now).count();
+        if (remaining <= 0) { timedOut = true; break; }
+        struct pollfd pfd = { pipefd[0], POLLIN, 0 };
+        int pr = ::poll(&pfd, 1, remaining);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) { timedOut = true; break; }  // poll timeout
         ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
         if (n > 0) {
             std::string chunk(buf, static_cast<size_t>(n));
@@ -272,45 +283,43 @@ int runShellStream(const std::string& command, PlatformHandle socket,
             std::string frame = hexLen + "\r\n" + chunk + "\r\n";
             if (platform::write_fd(socket, frame.data(), frame.size()) <= 0) break;
         } else if (n == 0) {
-            exitCode = 0;  // EOF — child exited; will be refined by waitpid
-            break;
+            eof = true;  // EOF — child closed output
         } else {
             if (errno == EINTR) continue;
             break;
         }
     }
     int status = 0;
+    bool reaped = false;
     if (::waitpid(pid, &status, WNOHANG) > 0) {
-        if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
-        else exitCode = -1;
+        reaped = true;
     } else {
-        // EOF reached but the child (e.g. `sh -c` reaping its own
-        // subshell) hasn't been reaped yet. Give it a short grace
-        // window before killing, so the true exit code is preserved.
-        bool reaped = false;
-        for (int i = 0; i < 20 && !stop.load(); ++i) {
+        // 子进程 (sh -c) 可能在回收自己的孙进程, 短宽限再探一次
+        for (int i = 0; i < 20; ++i) {
             struct timespec ts = {0, 50 * 1000 * 1000};  // 50ms
             ::nanosleep(&ts, nullptr);
             if (::waitpid(pid, &status, WNOHANG) > 0) { reaped = true; break; }
         }
-        if (reaped) {
-            if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
-            else exitCode = -1;
-        } else if (exitCode == 0) {
-            // still running after grace window — force kill
-            ::kill(pid, SIGKILL);
-            ::waitpid(pid, &status, 0);
-            exitCode = -1;
-        }
     }
-    ::alarm(0);
-    ::signal(SIGALRM, oldAlarm);
+    // 超时/stop/连接断开: 无论 sh 是否已退出, 都要连进程组一起杀 —
+    // sh 退出但孙进程(继承 pipe 写端)仍在时, kill(pid) 会留下孤儿 (N5)
+    if (timedOut || !eof) {
+        if (timedOut) exitCode = -2; else exitCode = -1;
+        ::kill(-pid, SIGKILL);
+        ::waitpid(pid, nullptr, 0);
+    } else if (reaped) {
+        // EOF 自然结束: 取真实退出码
+        if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
+        else exitCode = -1;
+        // 孙进程可能仍持有管道写端但已无输出 — 收敛清理
+        ::kill(-pid, SIGKILL);
+        ::waitpid(pid, nullptr, 0);
+    } else {
+        exitCode = -1;
+    }
     ::close(pipefd[0]);
-    g_streamChildPid = 0;
-    g_streamPipeRd = -1;
     return exitCode;
 }
-
 static char hexNibble(unsigned char b) {
     return b < 10 ? static_cast<char>('0' + b) : static_cast<char>('a' + b - 10);
 }

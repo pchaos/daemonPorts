@@ -292,12 +292,14 @@ gatekeeper 作为 SOCKS5 代理服务器运行，**常驻端口不释放**。客
 gatekeeper 常驻 :1080（SOCKS5 代理）
   │
   ├─ 客户端连接
-  │   ├─ 无认证 (NO_AUTH)
-  │   │   └─ 直接建立 TCP 隧道 → http_target
-  │   └─ 有认证 (USER/PASS)
-  │       ├─ 验证用户名密码
-  │       ├─ 失败 → 返回 AUTH_FAILED
-  │       └─ 成功 → 建立 TCP 隧道 → http_target
+  │   ├─ 未配置 userpass → 免密 (NO_AUTH) 直接放行
+  │   │   └─ 建立 TCP 隧道 → http_target
+  │   └─ 配置了 userpass (auth.type="userpass")
+  │       ├─ 客户端声明 NO_AUTH → 拒绝 (0x05 0xFF, 无可用方法)
+  │       ├─ 客户端声明 USER/PASS → 验证用户名密码
+  │       │   ├─ 失败 → 返回 AUTH_FAILED
+  │       │   └─ 成功 → 建立 TCP 隧道 → http_target
+  │       └─ 注: 配置 userpass 时绝不接受免密连接（认证绕过防护, 见 AUDIT_SECURITY.md N1）
   └─ 客户端发送 SOCKS5 请求 (CONNECT)
       └─ 转发到 http_target
 ```
@@ -670,7 +672,7 @@ gatekeeper 支持通过 HTTP 控制端口进行运行时配置热加载，无需
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `GET /health` | GET | 健康检查，返回 `{"status":"ok"}` |
-| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.13"}` |
+| `GET /version` | GET | 返回 gatekeeper 版本号 JSON，如 `{"version":"1.1.14"}` |
 | `GET /status` | GET | 返回当前端口运行状态 JSON |
 | `POST /run` | POST | 执行命令。白名单命令用 `{"name":"..."}` 指定（仅需 Token）；ad-hoc 命令用 `{"command":"...","pin":"..."}`（需 Token+PIN）。支持 `"stream":true` 流式输出 |
 | `POST /reload` | POST | 重新读取配置文件并应用变更 |

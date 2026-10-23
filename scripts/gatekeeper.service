@@ -48,19 +48,29 @@ TimeoutStopSec=150
 LimitNOFILE=65536
 LimitNPROC=1024
 
+# ── 权限降级 ──────────────────────────────────
+# 以非特权用户运行：后端、stop_command、控制端口 /run 的命令都继承该用户权限，
+# 即使控制 token 泄露或被后端反攻，也无法直接获得 root。
+# 该用户由 scripts/install-service.sh 自动创建；手动安装时先执行：
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin gatekeeper
+User=gatekeeper
+# 若后端需要监听 <1024 端口，取消注释授予 CAP_NET_BIND_SERVICE
+# （仅绑定低端口的权限，不提升其他能力）：
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
 # ── 安全加固 ──────────────────────────────────
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
-# 沙箱内必须可写的目录白名单：
+# 沙箱内必须可写的目录白名单（以 gatekeeper 用户视角）：
 #  - .9router / .dotfiles/bash/.9router：9router 数据
 #  - .nvm / .omniroute：omniroute 二进制与 DATA_DIR（storage.sqlite、logs、server/.pid）
-#  - /root/.config /root/.omniroute：服务以 root 运行时，omniroute 的 HOME 目录；
-#    其定时更新检查会写 $HOME/.config，只读会导致启动 ~55s 后 exit 1（重启循环）
-# 注意：gatekeeper 在沙箱内 spawn 的 omniroute（--daemon）会被 55s 更新检查问题杀死；
-# 推荐像远程部署那样由独立无沙箱单元的 omniroute 占用端口，gatekeeper 自动转入外部占用监控转发。
-ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router /home/user/.nvm /home/user/.omniroute /root/.config /root/.omniroute /usr/local/etc/gatekeeper
+# 注意：服务以 gatekeeper 用户运行，后端（9router/omniroute 等）的数据目录
+# 必须对 gatekeeper 用户可写（chown gatekeeper:gatekeeper <目录> 或相应 ACL），
+# 否则后端会因写权限失败退出。配置目录属主由 install-service.sh 处理，
+# 其余数据目录请按实际后端自行调整。
+ReadWritePaths=/home/user/.9router /home/user/.dotfiles/bash/.9router /home/user/.nvm /home/user/.omniroute /usr/local/etc/gatekeeper
 
 # ── 日志（默认走 journald）───────────────────
 StandardOutput=journal

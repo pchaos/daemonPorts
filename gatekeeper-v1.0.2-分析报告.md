@@ -16,6 +16,8 @@
 | **运行用户** | root (之前) → **user** (self-update 后) | user | `ps aux` |
 | **PID** | 7490 (旧) → 1485 (新) | 920 (oect1) | `pgrep` |
 
+> ⚠️ **勘误（2026-10-22）**：此处「运行用户 root → user 自动切换」系当时**推测**，经核查为**误判**——v1.0.2 二进制源码/符号不含任何 setuid/setgid 降权逻辑，`--version/--help/--control-port` 之外无 `self-update` 命令，git 全历史（142 提交）中的 service 文件也从未出现 `User=`。手动替换二进制不可能改变 systemd 运行用户；当年 oect0/oect1 实际以 user 运行，应为彼时远端单元文件本身配置了 `User=user`（当时未保存）。
+
 ---
 
 ## 2. 跨机对比：oect0 vs oect1
@@ -70,8 +72,8 @@ Total        862KB           853KB
 ```
 进程:   /usr/local/bin/gatekeeper /etc/gatekeeper/gatekeeper-config.json
 PID:    1485
-用户:   user
-启动:   2026-07-24 10:27 (自升级后)
+用户:   user  ↩︎ 勘误：非二进制行为，系当时单元文件配置 User=user（见 §1 勘误）
+启动:   2026-07-24 10:27 (升级后)
 端口:   0.0.0.0:3000
 Systemd: active (running)
 ```
@@ -80,7 +82,7 @@ Systemd: active (running)
 ```
 进程:   /usr/local/bin/gatekeeper /usr/local/etc/gatekeeper/config.json
 PID:    920
-用户:   user
+用户:   user  ↩︎ 勘误：同上，非二进制行为
 启动:   2026-07-24 09:26 (手动安装)
 端口:   0.0.0.0:3000
 Systemd: active (running)
@@ -95,10 +97,10 @@ Systemd: active (running)
 ## 4. 升级过程总结
 
 1. **备份旧二进制** → `gatekeeper.bak` (862KB, v1.0.1)
-2. **执行 self-update** → `./gatekeeper self-update`
+2. ~~**执行 self-update** → `./gatekeeper self-update`~~ — ⚠️ 勘误：v1.0.2 二进制无 `self-update` 命令（源码仅 `--version/--help/--control-port`），此步记录有误，实际当为手动替换
 3. **旧进程自动退出** → PID 7490 终止
 4. **systemd 自动拉起新进程** → PID 1485，v1.0.2
-5. **运行用户自动切换** → root → user（新二进制行为）
+5. ~~**运行用户自动切换** → root → user（新二进制行为）~~ — ⚠️ 勘误：二进制无降权逻辑，见 §1 勘误
 6. **跨机验证** → oect0 与 oect1 MD5 完全一致 ✅
 
 ---
@@ -110,8 +112,8 @@ Systemd: active (running)
 1. **新增 `--version` 支持** — 旧版无此功能，新版返回 `gatekeeper v1.0.2`
 2. **编译工具链升级** — 使用 clang 19.1.7 + LLD 19.1.7 (Fedora 42)，旧版工具链未知
 3. **二进制精简** — 文件减小 ~1%，字符串和符号数均减少，可能去除了调试符号或无用字符串
-4. **运行用户变更** — 新二进制默认以 `user` 身份运行（之前以 root），更安全
-5. **自升级机制** — 支持 `self-update` 命令自动拉取新二进制并重启
+4. ~~**运行用户变更** — 新二进制默认以 `user` 身份运行（之前以 root），更安全~~ — ⚠️ 勘误：二进制无降权逻辑，见 §1 勘误
+5. ~~**自升级机制** — 支持 `self-update` 命令自动拉取新二进制并重启~~ — ⚠️ 勘误：二进制无 `self-update` 命令，见 §4 勘误
 
 ---
 

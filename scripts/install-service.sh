@@ -29,6 +29,21 @@ if [ ! -f "$BINARY_SRC" ]; then
   exit 1
 fi
 
+# ── 运行用户（权限降级）────────────────────────
+# service 模板里的 User= 用户在不存在时自动创建；
+# 之后 gatekeeper 及它拉起的后端都以此非特权用户运行。
+SVC_USER="$(sed -n 's/^User=//p' "$SCRIPT_DIR/gatekeeper.service" | head -1)"
+if [ -n "$SVC_USER" ]; then
+  if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+    info "创建系统用户 $SVC_USER..."
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$SVC_USER"
+  else
+    info "用户 $SVC_USER 已存在"
+  fi
+else
+  warn "service 模板未配置 User=，gatekeeper 将以 root 运行（不推荐，见 AUDIT_SECURITY.md H2）"
+fi
+
 info "停止 gatekeeper 服务..."
 sudo systemctl stop gatekeeper 2>/dev/null || true
 sudo systemctl kill gatekeeper 2>/dev/null || true
@@ -47,12 +62,11 @@ else
   info "配置文件已存在，跳过"
 fi
 
-# 运行期调整 refresh_seconds 需要写回配置文件：将配置属主改为 service 用户
+# 运行期调整 refresh_seconds 需要写回配置文件：配置目录归 service 用户所有
 # （ProtectSystem=full 下 /usr 只读，故 service 模板还须把该目录加入 ReadWritePaths）。
-SVC_USER="$(sed -n 's/^User=//p' "$SCRIPT_DIR/gatekeeper.service" | head -1)"
 if [ -n "$SVC_USER" ]; then
-  sudo chown "$SVC_USER":"$SVC_USER" /usr/local/etc/gatekeeper/config.json
-  info "配置文件属主已设为 $SVC_USER (可写回 refresh_seconds)"
+  sudo chown -R "$SVC_USER":"$SVC_USER" /usr/local/etc/gatekeeper
+  info "配置目录属主已设为 $SVC_USER (可写回 refresh_seconds)"
 fi
 
 info "安装 service 文件..."

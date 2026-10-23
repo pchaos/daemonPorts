@@ -949,9 +949,12 @@ void PortRelay::socks5ListenLoop() {
                 unsigned char method = 0xff;  // 默认拒绝
                 bool useUserPass = false;
                 if (auth_.type == "userpass" && hasUserPass) {
+                    // userpass 配置下优先走 USER/PASS 认证
                     method = 0x02;
                     useUserPass = true;
-                } else if (hasNoAuth) {
+                } else if (auth_.type != "userpass" && hasNoAuth) {
+                    // 免密仅在未配置 userpass 时允许：
+                    // 否则客户端只声明 NO_AUTH 会绕过认证（N1, CRITICAL）
                     method = 0x00;
                 }
                 unsigned char authResp[] = {0x05, method};
