@@ -9,6 +9,13 @@ set_version(GATEKEEPER_VERSION)
 
 add_rules("mode.debug", "mode.release")
 
+-- ── Android: getifaddrs/freeifaddrs 声明在 NDK 中要求 API >= 24 ──
+-- xmake 默认探测到 21（find_ndk），过低会导致 tcp_monitor.cpp 编译失败。
+-- 这里作为默认配置，命令行 --ndk_sdkver 仍可覆盖。
+if is_plat("android") then
+    set_config("ndk_sdkver", "24")
+end
+
 -- ── systemd 集成选项 ───────────────────────────
 option("HAVE_SYSTEMD")
     set_default(false)

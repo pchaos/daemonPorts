@@ -37,6 +37,9 @@ using PlatformHandle = intptr_t;
 // ssize_t is not a standard Windows type; define it as intptr_t
 // (same signed-size semantics as POSIX ssize_t)
 using ssize_t = intptr_t;
+// sa_family_t is a POSIX type; Winsock names it ADDRESS_FAMILY.
+// relay.cpp uses sa_family_t portably (parseSockaddr return type, etc.).
+using sa_family_t = ADDRESS_FAMILY;
 #endif
 
 // SOCK_CLOEXEC is a Linux extension; not available on macOS or Windows.
