@@ -241,7 +241,7 @@ jobs:
 
       - name: Configure & Build (release, android arm64-v8a)
         run: |
-          xmake f -p android -a arm64-v8a -m release --ndk="$ANDROID_NDK_HOME" -y
+          xmake f -p android -a arm64-v8a -m release --ndk="$ANDROID_NDK_HOME" --ndk_sdkver=24 -y
           xmake
 
       - name: Upload artifacts
