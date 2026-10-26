@@ -622,7 +622,11 @@ void PortRelay::monitorBackend() {
     while (!stop_.load()) {
         if (backendPid_ > 0) {
             pid_t ret = platform::waitChild(backendPid_);
-            if (ret < 0 && !platform::isChildAlive(backendPid_)) {
+            // waitpid 返回 -1:进程不可等待(ECHILD,非子进程 daemon 或已被回收)。
+            // 此时若进程仍存活说明是已跟踪的 daemon 化后端,应轮询端口等其退出;
+            // 若已死则端口可能仍被占用,同样轮询等释放。两种情况都进 daemonized 分支,
+            // 不能当作"直接子进程退出"处理——否则 daemon 存活时会被误判为已退出。
+            if (ret < 0) {
                 // Non-child process (daemonized), poll port
                 int port = monitorPort();
                 if (port > 0) {
@@ -646,11 +650,19 @@ void PortRelay::monitorBackend() {
             int port = monitorPort();
             pid_t realPid = 0;
             if (port > 0) {
+                // 直接子进程(cli 包装进程)退出时,daemon 化后端可能仍在启动、端口尚未 bind,
+                // 或端口刚从 cli 转移给 daemon(ss 的 pid 短暂不匹配)。
+                // 不能因端口未 bind/持有者不符就立即判定后端死亡——会丢失 daemon 跟踪:
+                // backendPid_ 被清 0 后端口仍被 daemon 占用,listenLoop 卡在等端口释放,
+                // idle 回收永不触发(实测现象)。改为在 delayMs 窗口内持续探测。
                 int maxRetries = (int)((delayMs_ * 1.5) / 2000);
                 if (maxRetries < 1) maxRetries = 1;
                 for (int retry = 0; retry < maxRetries; retry++) {
                     if (stop_.load()) break;                     // 停机:立即放弃等待
-                    if (!isPortBound((uint16_t)port)) break;     // 端口已释放:后端已退出
+                    // --daemon 后端:cli 包装进程 fork 出 daemon 后立即退出,此刻 daemon
+                    // 可能尚未 bind 端口(port_bound=0, child_alive=0 是正常启动竞态,不是退出)。
+                    // 必须在整个 delayMs 窗口内持续探测,让 daemon 有时间完成绑定。
+                    // 真实后端退出(端口最终释放)由窗口耗尽后的"后端已退出"兜底。
                     realPid = platform::findPidUsingPort((uint16_t)port);
                     if (realPid > 0 && realPid != backendPid_ && realPid != platform::currentPid()) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(2000));

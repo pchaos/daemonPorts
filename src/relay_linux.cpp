@@ -23,6 +23,11 @@ pid_t findPidUsingPort(uint16_t port) {
                 pid_t pid = (pid_t)strtol(pidStr + 4, nullptr, 10);
                 if (pid > 0) return pid;
             }
+            char* eqStr = strrchr(buf, '=');  // 老版本 ss 可能输出其他格式,取最后一个 '=' 兜底
+            if (eqStr) {
+                pid_t pid = (pid_t)strtol(eqStr + 1, nullptr, 10);
+                if (pid > 0) return pid;
+            }
         } else {
             pclose(p);
         }
