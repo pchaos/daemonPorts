@@ -115,7 +115,7 @@ pid_t launchProcess(const std::string& command);
 void killProcess(pid_t pid);
 void termProcess(pid_t pid);
 bool isChildAlive(pid_t pid);
-pid_t waitChild(pid_t pid);
+pid_t waitChild(pid_t pid, int* statusOut = nullptr);
 bool isProcessRunning(pid_t pid);
 // Current process ID (portable wrapper for getpid/_getpid)
 inline pid_t currentPid() {

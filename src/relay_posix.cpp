@@ -353,9 +353,11 @@ bool isChildAlive(pid_t pid) {
     return ::waitpid(pid, &status, WNOHANG) == 0;
 }
 
-pid_t waitChild(pid_t pid) {
+pid_t waitChild(pid_t pid, int* statusOut) {
     int status;
-    return ::waitpid(pid, &status, 0);
+    pid_t ret = ::waitpid(pid, &status, 0);
+    if (statusOut) *statusOut = ret > 0 ? status : 0;
+    return ret;
 }
 
 bool isProcessRunning(pid_t pid) {

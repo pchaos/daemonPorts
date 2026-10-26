@@ -10,6 +10,10 @@
 #include <sstream>
 #include <algorithm>
 #include <thread>
+// WIFEXITED / WEXITSTATUS / WIFSIGNALED / WTERMSIG（仅 POSIX;Windows 走退出码）
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 // 运行期持久化配置（实现在 main.cpp）
 extern bool persistRefreshSeconds(const std::string& listenAddr, int seconds);
 #include <chrono>
@@ -203,6 +207,25 @@ void PortRelay::launchAndRelease() {
     int lfd = listenFd_.exchange(-1);
     if (lfd >= 0) platform::close_fd(lfd);
     std::cout << "  [" << name_ << "] 端口已释放，等待后端就绪" << std::endl;
+
+    // exec 失败（exit 127/126）几乎总是配置/权限问题，立即报出并原样保留 listenLoop
+    // 的自动重试语义；不再等 waitForBackend 空转 delayMs 毫秒。
+    int estatus = 0;
+    pid_t eret = platform::waitChild(pid, &estatus);
+    if (eret == pid) {
+        bool execFailed = false;
+#ifdef _WIN32
+        execFailed = (estatus == 127 || estatus == 126);
+#else
+        execFailed = WIFEXITED(estatus) && (WEXITSTATUS(estatus) == 127 || WEXITSTATUS(estatus) == 126);
+#endif
+        if (execFailed) {
+            std::cerr << "  [" << name_ << "] 后端 exec 失败: " << describeExitStatus(estatus)
+                      << " —— 检查命令路径/可执行权限/服务用户 DAC（常见：数据目录无权限）" << std::endl;
+            backendPid_ = 0;   // exec 失败=什么都没跑起来,无需 monitor 再做 daemon 轮询
+            return;
+        }
+    }
 
     if (!waitForBackend(delayMs_))
         std::cerr << "  [" << name_ << "] 警告: 后端可能未就绪" << std::endl;
@@ -618,10 +641,36 @@ int PortRelay::monitorPort() const {
     return port;
 }
 
+// 后端退出状态 → 可读描述。exit(127)/exit(126)=exec 失败（路径/权限/DAC），
+// 这是最常见的"后端永远起不来"原因，必须高亮给运维而不是静默空转。
+std::string PortRelay::describeExitStatus(int status) {
+    if (status == 0) return "正常退出 (exit 0)";
+#ifdef _WIN32
+    return "退出码 " + std::to_string(status);
+#else
+    if (WIFEXITED(status)) {
+        int code = WEXITSTATUS(status);
+        std::string s = "退出码 " + std::to_string(code);
+        if (code == 127) s += " (exec 失败：二进制不存在或 PATH 无此命令)";
+        else if (code == 126) s += " (exec 失败：无执行权限或目录不可遍历)";
+        return s;
+    }
+    if (WIFSIGNALED(status)) {
+        std::string s = "被信号 " + std::to_string(WTERMSIG(status)) + " 终止";
+        if (WTERMSIG(status) == SIGSEGV) s += " (SIGSEGV)";
+        else if (WTERMSIG(status) == SIGKILL) s += " (SIGKILL，可能 OOM/被回收)";
+        else if (WTERMSIG(status) == SIGTERM) s += " (SIGTERM，可能空闲回收)";
+        return s;
+    }
+    return "退出状态 " + std::to_string(status);
+#endif
+}
+
 void PortRelay::monitorBackend() {
     while (!stop_.load()) {
         if (backendPid_ > 0) {
-            pid_t ret = platform::waitChild(backendPid_);
+            int status = 0;
+            pid_t ret = platform::waitChild(backendPid_, &status);
             // waitpid 返回 -1:进程不可等待(ECHILD,非子进程 daemon 或已被回收)。
             // 此时若进程仍存活说明是已跟踪的 daemon 化后端,应轮询端口等其退出;
             // 若已死则端口可能仍被占用,同样轮询等释放。两种情况都进 daemonized 分支,
@@ -675,7 +724,7 @@ void PortRelay::monitorBackend() {
                     continue;
                 }
             }
-            std::cout << "  [" << name_ << "] 后端已退出" << std::endl;
+            std::cout << "  [" << name_ << "] 后端已退出 (" << describeExitStatus(status) << ")" << std::endl;
             backendPid_ = 0;
             if (!autoRestart_ || stop_.load()) break;
             std::cout << "  [" << name_ << "] 将在下次连接时重启" << std::endl;

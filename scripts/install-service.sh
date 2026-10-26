@@ -69,6 +69,72 @@ if [ -n "$SVC_USER" ]; then
   info "配置目录属主已设为 $SVC_USER (可写回 refresh_seconds)"
 fi
 
+# ── 后端数据目录权限 ─────────────────────────
+# 服务以 $SVC_USER 运行，它 fork/exec 的后端（9router/omniroute/…）继承同一身份。
+# ReadWritePaths 只解决沙箱内的读写挂载，不改变 DAC：数据目录若归部署者所有
+# （如 /home/user/.omniroute，常见 750/600），后端会 exec 失败，或启动后因
+# EACCES 崩溃退出。症状：journalctl 只见 "后端已启动" → "警告: 后端可能未就绪"，
+# 端口反复空转，客户端报 connection refused。沙箱 bind-mount 保持原 DAC，故按 DAC 修。
+if [ -n "$SVC_USER" ]; then
+  if ! command -v setfacl >/dev/null 2>&1; then
+    warn "未找到 setfacl：无法给后端数据目录授权，服务用户 $SVC_USER 可能无法访问后端目录"
+    warn "  Fedora/RHEL: dnf install -y acl"
+  fi
+
+  # ReadWritePaths 里每一项都是后端要读写的数据目录（配置目录已 chown 给 service 用户）
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -d "$p" ] || continue
+    [ "$(stat -c '%U' "$p")" = "$SVC_USER" ] && continue
+
+    if command -v setfacl >/dev/null 2>&1; then
+      # 祖先目录只需 traverse；ACL mask 会把 rwx 压到 x，恰好是最小权限
+      d="$(dirname "$p")"
+      while [ "$d" != "/" ]; do
+        [ "$(stat -c '%U' "$d" 2>/dev/null)" = "$SVC_USER" ] || sudo setfacl -m "u:$SVC_USER:x" "$d" || true
+        d="$(dirname "$d")"
+      done
+      if sudo -u "$SVC_USER" -g "$SVC_USER" test -r "$p" 2>/dev/null \
+         && sudo -u "$SVC_USER" -g "$SVC_USER" test -x "$p" 2>/dev/null; then
+        if sudo -u "$SVC_USER" -g "$SVC_USER" test -w "$p" 2>/dev/null; then
+          info "  $p: $SVC_USER 已有读写权限，跳过"
+          continue
+        fi
+        # 可读写但目录不可写：只放宽目录自身 + 新建文件默认 ACL，不递归——
+        # 避免把程序目录（如 .nvm/node_modules）整体变成服务用户可写。
+        # 已存在的 600/640 文件不受影响，仍会 EACCES（探针会报出来）。
+        sudo setfacl -m "u:$SVC_USER:rwx" "$p" || true
+        sudo setfacl -d -m "u:$SVC_USER:rwX" "$p" || true
+        info "  $p: 目录不可写，已放宽目录自身 + 新建文件默认 ACL（未递归）"
+      else
+        # 连读/执行都不通 → 整棵树对服务用户不可访问，必须递归授权
+        sudo setfacl -R -m "u:$SVC_USER:rwX" "$p" || true
+        sudo setfacl -d -m "u:$SVC_USER:rwX" "$p" || true   # 之后新建的文件也自动带权限
+        info "  $p: 整树不可访问，已递归授予 $SVC_USER 读写（含新建文件默认 ACL）"
+      fi
+    fi
+  done < <(sed -n 's/^ReadWritePaths=//p' "$SCRIPT_DIR/gatekeeper.service" | tr ' ' '\n')
+fi
+
+# ── 权限实测（DAC 探针）──────────────────────
+# 装完当场暴露"服务能起来、后端起不来"这类静默失败，不必等客户端报连接被拒。
+if [ -n "$SVC_USER" ]; then
+  for p in $(sed -n 's/^ReadWritePaths=//p' "$SCRIPT_DIR/gatekeeper.service" | tr ' ' '\n'); do
+    [ -n "$p" ] && [ -d "$p" ] || continue
+    if sudo -u "$SVC_USER" -g "$SVC_USER" test -r "$p" 2>/dev/null \
+       && sudo -u "$SVC_USER" -g "$SVC_USER" test -w "$p" 2>/dev/null; then
+      info "  权限 OK: $p"
+    else
+      warn "  权限不足: $p 对 $SVC_USER 不可读写，后端在该目录会启动失败"
+      warn "    修复: sudo setfacl -R -m u:$SVC_USER:rwX $p"
+    fi
+  done
+  # 后端二进制路径同样验证：exec 不了是最常见的静默失败原因
+  sudo -u "$SVC_USER" -g "$SVC_USER" test -x /usr/local/bin/gatekeeper \
+    && info "  权限 OK: /usr/local/bin/gatekeeper" \
+    || warn "  权限不足: /usr/local/bin/gatekeeper 对 $SVC_USER 不可执行"
+fi
+
 info "安装 service 文件..."
 sudo cp -f "$SCRIPT_DIR/gatekeeper.service" /etc/systemd/system/
 

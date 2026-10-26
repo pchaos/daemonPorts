@@ -276,10 +276,15 @@ bool isChildAlive(pid_t pid) {
     return ret == WAIT_TIMEOUT;
 }
 
-pid_t waitChild(pid_t pid) {
+pid_t waitChild(pid_t pid, int* statusOut) {
     HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
     if (!h) return -1;
     WaitForSingleObject(h, INFINITE);
+    if (statusOut) {
+        DWORD ec = 0;
+        GetExitCodeProcess(h, &ec);
+        *statusOut = static_cast<int>(ec);
+    }
     CloseHandle(h);
     return pid;
 }

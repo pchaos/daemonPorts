@@ -47,6 +47,8 @@ class PortRelay {
     bool launchOnStart_ = false;
     public:
     std::atomic<pid_t> backendPid_{0};
+    // monitor：后端退出码/信号 → 可读描述（0=正常退出，127/126=exec 失败）
+    static std::string describeExitStatus(int status);
     // 端口被外部进程占用时的接管状态（绑定失败 + 配置了 stop_command 时启用）
     std::atomic<bool> externalOccupied_{false};
     // 回收接管失败后，本次运行内不再尝试回收外部占用者（重启或 /reload 重新武装）
