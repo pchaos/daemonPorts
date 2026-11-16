@@ -11,23 +11,21 @@
       {
         "name": "stream-echo",
         "command": "echo line1 && sleep 0.1 && echo line2"
+      },
+      {
+        "name": "disk-usage",
+        "command": "df -h"
+      },
+      {
+        "name": "process-list",
+        "command": "ps aux --sort=-%cpu | head -10"
+      },
+      {
+        "name": "check-ports",
+        "command": "ss -tlnp"
       }
     ]
   },
-  "commands": [
-    {
-      "name": "disk-usage",
-      "command": "df -h"
-    },
-    {
-      "name": "process-list",
-      "command": "ps aux --sort=-%cpu | head -10"
-    },
-    {
-      "name": "check-ports",
-      "command": "ss -tlnp"
-    }
-  ],
   "ports": [
     {
       "name": "9router",
