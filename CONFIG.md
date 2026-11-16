@@ -704,7 +704,7 @@ service 模板把该目录加入 `ReadWritePaths`；手动部署时需同样处�
 `POST /run` 提供两种执行方式：
 
 1. **白名单预设命令**：命令在 `control.commands` 中预配置。请求体 `{"name": "disk-usage"}`，仅需 Token 认证。
-2. **临时 ad-hoc 命令**：请求体携带完整命令 `{"command": "echo hi", "pin": "123456"}`，需 Token + PIN 双重认证（PIN 做常量时间比较，连续失败 5 次触发 60 秒冷却）。
+2. **临时 ad-hoc 命令**：请求体携带完整命令 `{"command": "echo hi", "pin": "123456"}`，需 Token + PIN 双重认证（PIN 做常量时间比较防时序攻击；目前无失败冷却，暴力受限依赖 `control.max_connections` 的按 IP 限流）。
 
 同步响应（默认）以 JSON 返回退出码与输出：
 

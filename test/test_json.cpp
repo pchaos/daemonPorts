@@ -63,3 +63,29 @@ TEST_CASE("JSON 解析 - 负数") {
     REQUIRE(v.is_obj());
     CHECK(v.get("n")->as_num() == -42);
 }
+
+// ── B1 回归: 截断输入不得死循环 (旧实现 p 越界推进, parse_obj 内嵌
+//    while(true) 永不退出, 控制线程 CPU 100%)。现在返回部分结果即可。
+TEST_CASE("JSON 解析 - 截断输入不死循环") {
+    auto a = parse_json("{\"a\":");
+    // 旧实现挂死; 修复后返回部分对象 (键已解析, 值缺失)
+    CHECK(a.is_obj());
+    auto b = parse_json("[1,2,");
+    CHECK(b.is_arr());
+    auto c = parse_json("{\"a\":[{\"b\":");
+    // 不抛异常、不挂死即通过
+    (void)c;
+}
+
+// ── N11 回归: 递归深度受限, 深嵌套不得栈溢出。
+TEST_CASE("JSON 解析 - 深度上限") {
+    // 100k 层数组: 修复前栈溢出崩溃, 修复后到 kMaxDepth(64) 截断安全返回
+    std::string deep = std::string(100000, '[') + "1" + std::string(100000, ']');
+    auto v = parse_json(deep);
+    // 解析到深度上限后返回, 不崩溃即可
+    (void)v;
+    // 常规深度仍正常工作
+    auto normal = parse_json(R"({"a":{"b":{"c":[1,2]}}})");
+    REQUIRE(normal.is_obj());
+    CHECK(normal.get("a") != nullptr);
+}

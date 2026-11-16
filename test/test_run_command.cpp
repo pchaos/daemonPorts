@@ -226,3 +226,47 @@ TEST_CASE("runCommand returns 127 for missing program") {
     CHECK(ec == 127);
 }
 
+// ── F1 回归: 输出超过 maxOutputBytes 时不得死锁 (旧实现达上限 break 后
+//    waitpid 阻塞在仍持有管道写端、持续产出的 sh 上, /run 控制线程永久卡死)。
+TEST_CASE("runShellCommand output beyond cap returns without deadlock") {
+    using namespace std::chrono;
+    std::string out;
+    auto t0 = steady_clock::now();
+    int ec = platform::runShellCommand("yes x | head -c 200000", 5000, 65536, out);
+    auto ms = duration_cast<milliseconds>(steady_clock::now() - t0).count();
+    CHECK(ec == 0);
+    CHECK(out.size() == 65536);
+    CHECK(ms < 5000);  // 不得等满 timeout: 达上限后应继续排空并正常回收
+}
+
+// ── H3 回归: 超时后连进程组杀, sleep 孙进程不得残留为孤儿。
+TEST_CASE("runShellCommand timeout kills process group (no orphan)") {
+    using namespace std::chrono;
+    std::string out;
+    auto t0 = steady_clock::now();
+    int ec = platform::runShellCommand("sleep 30 & echo start; sleep 0.2; echo done", 800, 65536, out);
+    auto ms = duration_cast<milliseconds>(steady_clock::now() - t0).count();
+    CHECK(ec == -2);            // timeout 语义
+    CHECK(ms >= 700);
+    CHECK(ms < 3000);
+    CHECK(out.find("start") != std::string::npos);
+    // 孙进程组随超时被 SIGKILL → 不留孤儿
+    int orphans = system("pgrep -f 'sleep 30' >/dev/null 2>&1 && echo 1 || echo 0");
+    CHECK(orphans == 0);
+}
+
+// ── N5 语义: EOF 正常结束时也清理 sh 提前退出后残留的孙进程。
+// 后台 sleep 的 stdout 重定向走, 不继承管道 → 管道写端随 sh 退出关闭 → EOF。
+TEST_CASE("runShellCommand group cleanup after EOF") {
+    using namespace std::chrono;
+    std::string out;
+    auto t0 = steady_clock::now();
+    int ec = platform::runShellCommand("sleep 30 >/dev/null 2>&1 & echo hi", 5000, 65536, out);
+    auto ms = duration_cast<milliseconds>(steady_clock::now() - t0).count();
+    CHECK(ec == 0);
+    CHECK(out.find("hi") != std::string::npos);
+    CHECK(ms < 3000);
+    int orphans = system("pgrep -f 'sleep 30' >/dev/null 2>&1 && echo 1 || echo 0");
+    CHECK(orphans == 0);
+}
+

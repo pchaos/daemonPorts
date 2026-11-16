@@ -131,19 +131,21 @@ TEST_CASE("buildStartupResponse - 增减微调按钮") {
     PortRelay relay(cfg);
     std::string resp = relay.buildStartupResponse();
 
-    // 四个相对微调按钮：-5 / -1 / +1 / +5
+    // 相对增减按钮组：-10 / -5 / -1 / +1 / +5 / +10
+    CHECK(resp.find("onclick=\"adjustRefresh(-10)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"adjustRefresh(-5)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"adjustRefresh(-1)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"adjustRefresh(1)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"adjustRefresh(5)\"") != std::string::npos);
+    CHECK(resp.find("onclick=\"adjustRefresh(10)\"") != std::string::npos);
     // 预设绝对值按钮仍在
     CHECK(resp.find("onclick=\"setRefresh(1)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"setRefresh(60)\"") != std::string::npos);
     CHECK(resp.find("onclick=\"setRefresh(0)\"") != std::string::npos);
-    // adjustRefresh 定义存在，且钳制上下界
+    // adjustRefresh 定义存在，且出队时基于已确认 target 计算并钳制
     CHECK(resp.find("function adjustRefresh(delta)") != std::string::npos);
-    CHECK(resp.find("if (n > 3600) n = 3600;") != std::string::npos);
-    CHECK(resp.find("if (n < 0) n = 0;") != std::string::npos);
+    CHECK(resp.find("clamp(target + op.val)") != std::string::npos);
+    CHECK(resp.find("function clamp(v)") != std::string::npos);
 }
 
 TEST_CASE("buildStartupResponse - 倒计时脚本") {
@@ -163,7 +165,7 @@ TEST_CASE("buildStartupResponse - 倒计时脚本") {
     CHECK(resp.find("5 秒后自动重试") != std::string::npos);
 }
 
-TEST_CASE("buildStartupResponse - 按钮增减基于配置基准而非剩余倒计时") {
+TEST_CASE("buildStartupResponse - 增减基于已确认总延时而非剩余倒计时") {
     PortConfig cfg;
     cfg.name = "svc";
     cfg.listenAddr = ":9999";
@@ -173,16 +175,15 @@ TEST_CASE("buildStartupResponse - 按钮增减基于配置基准而非剩余倒�
     PortRelay relay(cfg);
     std::string resp = relay.buildStartupResponse();
 
-    // 基准 base 与初始倒计时 secs 同源（配置值），但独立于 tick() 每秒递减的 secs
+    // target 与初始倒计时 secs 同源（配置值），但独立于 tick() 每秒递减的 secs
     CHECK(resp.find("var secs = 30;") != std::string::npos);
-    CHECK(resp.find("var base = 30;") != std::string::npos);
-    // adjustRefresh 在基准上加 delta：30+1=31，倒计时归零(secs=0)时点击也不会变成 1
-    CHECK(resp.find("var n = base + delta;") != std::string::npos);
-    CHECK(resp.find("var n = secs + delta;") == std::string::npos);
-    CHECK(resp.find("if (n === base) return;") != std::string::npos);
-    // 调整成功后 secs（倒计时）与 base（基准）同步为新绝对值
-    CHECK(resp.find("secs = n;") != std::string::npos);
-    CHECK(resp.find("base = n;") != std::string::npos);
+    CHECK(resp.find("var target = 30;") != std::string::npos);
+    // 增减出队时才基于最新已确认 target 计算：30+1=31，倒计时归零(secs=0)时点击也不会变成 1
+    CHECK(resp.find("var n = (op.kind === 'set') ? clamp(op.val) : clamp(target + op.val);") != std::string::npos);
+    // 无变化(相对操作结果==当前 target) → 跳过；成功后将已完成 target 同步为服务器确认值
+    CHECK(resp.find("if (n === target)") != std::string::npos);
+    CHECK(resp.find("target = r.refresh_seconds;") != std::string::npos);
+    CHECK(resp.find("secs = target;") != std::string::npos);
 }
 
 TEST_CASE("buildStartupResponse - 停用态停用自动刷新") {

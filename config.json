@@ -3,9 +3,8 @@
     "listen": ":29999",
     "auth": {
       "type": "token",
-      "token": "my-secret-token"
+      "token": ""
     },
-    "pin": "1234",
     "max_connections": 20,
     "rate_limit_seconds": 60
   },

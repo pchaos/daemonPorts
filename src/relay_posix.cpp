@@ -189,6 +189,9 @@ int runShellCommand(const std::string& command, int timeoutMs,
     pid_t pid = ::fork();
     if (pid < 0) { ::close(pipefd[0]); ::close(pipefd[1]); return -1; }
     if (pid == 0) {
+        // 子进程放入独立进程组: 超时/中断/输出达上限后可连组一起杀,
+        // 避免只杀 /bin/sh 而遗留其派生的孙进程 (对齐 runShellStream 的 N5 修复)
+        ::setpgid(0, 0);
         ::close(pipefd[0]);
         ::dup2(pipefd[1], STDOUT_FILENO);
         ::dup2(pipefd[1], STDERR_FILENO);
@@ -196,35 +199,63 @@ int runShellCommand(const std::string& command, int timeoutMs,
         ::execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
         _exit(127);
     }
+    // 父进程侧也设定进程组(竞态保护: 双方都调用, 幂等)
+    ::setpgid(pid, pid);
     ::close(pipefd[1]);
     auto deadline = std::chrono::steady_clock::now()
                     + std::chrono::milliseconds(timeoutMs);
     char buf[4096];
     int exitCode = -1;
     bool timedOut = false;
-    while (output.size() < (size_t)maxOutputBytes) {
+    bool capReached = false;
+    bool eof = false;
+    while (!timedOut && !eof) {
         auto now = std::chrono::steady_clock::now();
         int remaining = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
                             deadline - now).count();
         if (remaining <= 0) { timedOut = true; break; }
         struct pollfd pfd = { pipefd[0], POLLIN, 0 };
         int pr = ::poll(&pfd, 1, remaining);
-        if (pr <= 0) { timedOut = true; break; }  // timeout or poll error
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) { timedOut = true; break; }  // poll 超时
+        // 数据读完后的 POLLHUP: 写端全部关闭 → 输出已结束, 进入回收。
+        // (终态前 read 已收敛: 管道数据读净后, 写端关闭同时触发 HUP)
+        if ((pfd.revents & (POLLHUP | POLLERR)) &&
+            !(pfd.revents & POLLIN)) { eof = true; break; }
         ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
         if (n > 0) {
-            int room = maxOutputBytes - (int)output.size();
-            output.append(buf, static_cast<size_t>(n > room ? room : n));
-            if ((int)output.size() >= maxOutputBytes) break;
-        } else break;  // EOF
+            if (capReached) {
+                // 输出已达上限: 继续读并丢弃, 让写端不被阻塞, 有限输出的命令
+                // 得以正常结束 (旧实现达 cap break 后 waitpid 阻塞在未退出的 sh 上)。
+                // 无限输出 (如 `yes x`) → 数据源源不断, 由 poll 剩余时间 → 超时兜底。
+            } else {
+                int room = maxOutputBytes - (int)output.size();
+                output.append(buf, static_cast<size_t>(n > room ? room : n));
+                if ((int)output.size() >= maxOutputBytes) capReached = true;
+            }
+        } else if (n == 0) {
+            eof = true;  // EOF
+        } else {
+            if (errno == EINTR) continue;
+            break;
+        }
     }
-    if (timedOut) {
-        ::kill(pid, SIGKILL);
+    if (timedOut || !eof) {
+        // 超时 / 输出截断后命令未正常结束: 连进程组一起杀 (N5 语义)
+        if (timedOut) exitCode = -2; else exitCode = -1;
+        ::kill(-pid, SIGKILL);
         ::waitpid(pid, nullptr, 0);
-        exitCode = -2;  // timeout
     } else {
         int status = 0;
         if (::waitpid(pid, &status, 0) >= 0 && WIFEXITED(status))
             exitCode = WEXITSTATUS(status);
+        // sh 可能已提前退出但孙进程仍存活(如 `sleep 30 & echo x`):
+        // 连进程组一起清掉, 防孤儿残留 (对齐 runShellStream 的 N5 语义)
+        ::kill(-pid, SIGKILL);
+        ::waitpid(pid, nullptr, 0);
     }
     ::close(pipefd[0]);
     return exitCode;

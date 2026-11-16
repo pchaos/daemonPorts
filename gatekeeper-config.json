@@ -3,9 +3,8 @@
     "listen": ":29999",
     "auth": {
       "type": "token",
-      "token": "gatekeeper-secret"
+      "token": ""
     },
-    "pin": "4271",
     "max_connections": 20,
     "rate_limit_seconds": 60,
     "commands": [
