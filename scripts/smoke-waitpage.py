@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """等待页「快速调整等待延时」按钮冒烟测试:
 - 按钮分组标签(增减/设为)与 ±10/+10 按钮存在且顺序正确
-- 增减按钮基于当前剩余倒计时 secs 计算(25+10→35, 25+5→30, 25-100→0 停用)
-- 成功后从新值重新倒计(meta content=35, 显示「已调整为 35 秒」)
+- 增减/设为 基于已确认总延时 target(不随倒计时递减), 出队时才计算 → 连点不丢操作
+- 串行队列: 每次点击入队, 上一次请求确认后才发下一个 → 无并发覆盖、无双倒计时链
+- 停用: set 0 → 清 meta, 不 reload
 用法: scripts/smoke-waitpage.py [gatekeeper 二进制路径]  (默认 ./build/linux/x86_64/gatekeeper)
 """
-import json, os, re, signal, subprocess, sys, tempfile, time, urllib.request
+import json, os, re, subprocess, sys, tempfile, time, urllib.request
 
 BIN = sys.argv[1] if len(sys.argv) > 1 else "build/linux/x86_64/gatekeeper"
 if not os.path.exists(BIN):
@@ -19,7 +20,7 @@ open(CFG, "w").write(json.dumps({
     "ports": [{
         "name": "web", "enabled": True, "listen": f"127.0.0.1:{PORT}",
         "command": "/bin/sleep 30", "delay": 2000,
-        "refresh_seconds": 30, "auto_restart": True
+        "refresh_seconds": 60, "auto_restart": True
     }]
 }))
 
@@ -40,24 +41,27 @@ fails = []
 def check(name, cond):
     print(("PASS " if cond else "FAIL ") + name)
     if not cond: fails.append(name)
-if fails:
-    lines_debug = [x for x in lines if x[:2] in ("S1", "S2", "S3", "S4")]
-    print("  raw:", " || ".join(lines_debug))
 
 # 1) 页面结构
 check("页面含『快速调整等待延时』", "快速调整等待延时" in html)
 check("按钮分组 增减/设为", ">增减:</span>" in html and ">设为:</span>" in html)
+for x in ['adjustRefresh(-10)">-10秒', 'adjustRefresh(-5)">-5秒', 'adjustRefresh(-1)">-1秒',
+          'adjustRefresh(1)">+1秒', 'adjustRefresh(5)">+5秒', 'adjustRefresh(10)">+10秒',
+          'onclick="setRefresh(1)">1秒']:
+    assert x in html, x
 order = [html.index(x) for x in
          ['adjustRefresh(-10)">-10秒', 'adjustRefresh(-5)">-5秒', 'adjustRefresh(-1)">-1秒',
           'adjustRefresh(1)">+1秒', 'adjustRefresh(5)">+5秒', 'adjustRefresh(10)">+10秒',
           'onclick="setRefresh(1)">1秒']]
 check("增减按钮顺序 -10..+10 且先于设为组", order == sorted(order))
-check("无 base 变量残留(基于剩余倒计时)", "var base" not in html and "base + delta" not in html)
-check("adjustRefresh 用 secs+delta", "var n = secs + delta;" in html)
+check("居中放大 + 分组行", "text-align:center;font-size:larger" in html)
+check("无 base/剩余倒计时残留", "var base" not in html and "var n = secs + delta" not in html)
+check("基于 target 的队列", "var target = 60" in html and "target + op.val" in html)
 
-# 2) 抽出页面真实脚本, node 驱动: 剩余 25 秒时点 +10/+5/-100
+# 2) 抽出页面真实脚本, node 驱动(已确认 target=60, 倒计时剩 25):
+#    连点 +5、+1(不等响应)→ 串行: 65→finish→66→finish; 再设为 10 → 10; 再 -100 → 停用
 script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
-script = script.replace("setTimeout(tick, 1000);", "/* tick loop disabled in harness */")
+script = script.replace("timer = setTimeout(tick, 1000);", "/* tick loop disabled in harness */")
 harness = r"""
 var __metaEl = {
   content: null,
@@ -74,24 +78,30 @@ var document = {
 var location = { hostname: 'x', reload: function(){ __st.reloaded = true; } };
 var __fetchLog = [];
 var fetch = function(url){
-  __fetchLog.push(String(url));
-  return Promise.resolve({ json: function(){ return Promise.resolve({ ok: true }); } });
+  var m = /secs=(-?\d+)/.exec(String(url));
+  var n = m ? +m[1] : NaN;
+  __fetchLog.push(n);
+  /* 模拟服务器确认值 */
+  return Promise.resolve({ json: function(){ return Promise.resolve({ ok: true, refresh_seconds: n }); } });
 };
 """
 drive = r"""
 """ + script + r"""
-/* 剩余 25 秒: 依次点 +10 / +5 / -100, 每次等 fetch 异步完成 */
+/* 已确认 target=60; 页面倒计时已跑掉一些(模拟剩 25, 但不改 target) */
 secs = 25;
-adjustRefresh(10);
+/* 连点 +5、+1, 不等响应: 都应基于最新确认的 target(60→65→66), 不是递减的 secs */
+adjustRefresh(5);
+adjustRefresh(1);
+/* 等两个串行请求全部完成 */
 setTimeout(function(){
-  console.log('S1=' + secs + '|' + __metaEl.content + '|' + (!!__st.reloaded));
-  adjustRefresh(5);
+  console.log('A1|' + target + '|' + secs + '|' + __metaEl.content + '|' + (!!__st.reloaded));
+  setRefresh(10);                 /* 设为 10 */
   setTimeout(function(){
-    console.log('S2=' + secs + '|' + __metaEl.content);
-    adjustRefresh(-100);
+    console.log('A2|' + target + '|' + __metaEl.content);
+    adjustRefresh(-100);          /* 10-100 → 0 停用 */
     setTimeout(function(){
-      console.log('S3=' + secs + '|' + __metaEl.content + '|' + enabled + '|' + (!!__st.reloaded));
-      console.log('S4=' + __fetchLog.join(','));
+      console.log('A3|' + target + '|' + __metaEl.content + '|' + enabled + '|' + (!!__st.reloaded));
+      console.log('A4|' + __fetchLog.join(','));
     }, 50);
   }, 50);
 }, 50);
@@ -102,23 +112,22 @@ open(jsfile, "w").write(harness + drive)
 node = subprocess.run(["node", jsfile], capture_output=True, text=True)
 lines = node.stdout.splitlines()
 def val(prefix):
-    l = next((x for x in lines if x.startswith(prefix + "=")), "")
+    l = next((x for x in lines if x.startswith(prefix + "|")), "")
     return l[len(prefix) + 1:].split("|") if l else []
-s1, s2, s3 = val("S1"), val("S2"), val("S3")
-s4 = next((x for x in lines if x.startswith("S4=")), "")
-if node.returncode != 0 or not s1:
+a1, a2 = val("A1"), val("A2")
+a3 = val("A3")
+a4 = next((x for x in lines if x.startswith("A4|")), "")
+if node.returncode != 0 or not a1:
     check("node 驱动页面脚本", False)
     print("  node stdout:", node.stdout[:600])
     print("  node stderr:", node.stderr[:600]); sys.exit(1)
 check("node 驱动页面脚本", True)
-# 算术: 25+10=35(显示 34, tick 已减 1); 34+5=39; 39-100 夹到 0
-check("25+10 → meta=35", s1[1] == "35")
-check("25+10 → 未停用未重载", s1[2] == "false")
-check("34+5 → meta=39(基于剩余倒计时)", s2[1] == "39")
-check("39-100 → 夹到 0 停用", s3[2] == "false")
-check("39-100 → 清空 meta 并 reload", s3[1] == "null" and s3[3] == "true")
-seq = [p.split("secs=")[1] for p in s4.split("S4=")[1].split(",")] if s4 else []
-check("请求序列 35→39→0", seq == ["35", "39", "0"])
+check("60+5,+1 连点串行 → target=66, secs=65(tick 已减 1)", a1[:2] == ["66", "65"])
+check("meta 同步 66, 未 reload", a1[2] == "66" and a1[3] == "false")
+check("设为 10 → target=10", a2[:2] == ["10", "10"])
+check("10-100 → 夹到 0 停用, 清 meta, 无 reload", a3[0] == "0" and a3[1] == "null" and a3[2] == "false" and a3[3] == "false")
+seq = [int(x) for x in a4.split("A4|")[1].split(",")] if a4 else []
+check("请求序列 65→66→10→0(串行, 每次基于最新 target)", seq == [65, 66, 10, 0])
 
 os.remove(CFG)
 print("\n%s" % ("全部通过" if not fails else f"失败 {len(fails)} 项: {fails}"))
