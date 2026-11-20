@@ -30,6 +30,9 @@ struct ReloadSummary {
 #define GATEKEEPER_VERSION "unknown"
 #endif
 
+// 请求体上限: 防御超大 Content-Length / slow-body DoS (N9)
+static const int kMaxRequestBody = 1 << 20;  // 1MB
+
 extern ReloadSummary reloadFromFile();
 extern ReloadSummary reloadFromJson(const std::string& json);
 extern std::mutex g_relaysMutex;
@@ -217,7 +220,14 @@ bool ControlServer::parseHttpRequest(int fd, HttpRequest& req) {
     // handle Content-Length if present and body incomplete
     auto it = req.headers.find("content-length");
     if (it != req.headers.end()) {
-        int cl = std::stoi(it->second);
+        int cl = 0;
+        try {
+            cl = std::stoi(it->second);   // 畸形值(非数字/溢出) → 400, 不再让异常上抛
+        } catch (...) {
+            return false;
+        }
+        if (cl < 0) return false;
+        if (cl > kMaxRequestBody) return false;   // 拒绝超大 body (N9)
         while ((int)body.size() < cl) {
             ssize_t n = platform::read_fd(fd, buf, sizeof(buf));
             if (n <= 0) break;

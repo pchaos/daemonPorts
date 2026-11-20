@@ -267,6 +267,11 @@ bool configsEqual(const PortConfig& a, const PortConfig& b) {
         && a.monitor.enabled == b.monitor.enabled
         && a.monitor.intervalSec == b.monitor.intervalSec
         && a.monitor.logDedup == b.monitor.logDedup
+        && a.monitor.ipv6 == b.monitor.ipv6
+        && a.auth.type == b.auth.type
+        && a.auth.username == b.auth.username
+        && a.auth.password == b.auth.password
+        && a.protocols == b.protocols
         && a.launchOnStart == b.launchOnStart;
 }
 

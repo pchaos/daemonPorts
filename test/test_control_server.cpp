@@ -238,3 +238,52 @@ TEST_CASE("ControlServer - /__set_refresh 专用令牌与路由") {
     g_refreshToken.clear();
     g_relays.clear();
 }
+
+// ── N9 回归: 畸形/超大 Content-Length 被拒绝, 不抛异常、不慢连灌 body。
+TEST_CASE("ControlServer - malformed and oversized Content-Length rejected") {
+    ControlConfig cfg;
+    cfg.listen = ":19993";
+    cfg.auth.type = "none";
+    ControlServer server(cfg);
+    server.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    auto sendRaw = [&](const std::string& req) -> std::string {
+        int fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return "";
+        sockaddr_in addr;
+        std::memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(19993);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (platform::connect_fd(fd, &addr, sizeof(addr)) < 0) { platform::close_fd(fd); return ""; }
+        platform::set_recv_timeout(fd, 3);
+        platform::write_fd(fd, req.data(), req.size());
+        char buf[4096];
+        ssize_t n = platform::read_fd(fd, buf, sizeof(buf));
+        platform::close_fd(fd);
+        return n > 0 ? std::string(buf, static_cast<size_t>(n)) : "";
+    };
+
+    // 1) 非数字 Content-Length → 旧实现 std::stoi 抛异常; 现在返回 400
+    std::string r1 = sendRaw(
+        "POST /run HTTP/1.1\r\nHost: localhost\r\nContent-Length: abc\r\n\r\n{}");
+    CHECK(r1.find("HTTP/1.1 400") != std::string::npos);
+
+    // 2) 超大 Content-Length (>1MB) → 立即拒绝, 不等 body
+    std::string r2 = sendRaw(
+        "POST /run HTTP/1.1\r\nHost: localhost\r\nContent-Length: 99999999\r\n\r\n{}");
+    CHECK(r2.find("HTTP/1.1 400") != std::string::npos);
+
+    // 3) 负值 Content-Length → 拒绝
+    std::string r3 = sendRaw(
+        "POST /run HTTP/1.1\r\nHost: localhost\r\nContent-Length: -5\r\n\r\n{}");
+    CHECK(r3.find("HTTP/1.1 400") != std::string::npos);
+
+    // 4) 正常小 body 正常解析并进入路由(未知命令名 → 404, 而非 CL 拒绝的 400)
+    std::string r4 = sendRaw(
+        "POST /run HTTP/1.1\r\nHost: localhost\r\nContent-Length: 12\r\n\r\n{\"name\":\"x\"}");
+    CHECK(r4.find("HTTP/1.1 404") != std::string::npos);
+
+    server.stop();
+}

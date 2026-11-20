@@ -1,7 +1,10 @@
 #include "doctest.h"
 #include "config.h"
+#include "json.h"
 
 #include <fstream>
+#include <sstream>
+#include <unistd.h>   // mkstemp / close / unlink
 
 TEST_CASE("parseConfig - 有效配置") {
     auto cfgs = parseConfig(R"({
@@ -416,6 +419,57 @@ TEST_CASE("parseConfig - enabled=false 时 launch_on_start 端口被跳过") {
     REQUIRE(cfgs.size() == 1);
     CHECK(cfgs[0].listenAddr == ":4000");
     CHECK(cfgs[0].launchOnStart == true);
+}
+
+// ── N8 回归: updateRefreshSecondsInFile 走原子写 (tmp+fsync+rename),
+//    原文件不被截断, 写完后原文件内容完整、无 .tmp 残留。
+TEST_CASE("updateRefreshSecondsInFile - 原子写回配置") {
+    char tmpl[] = "/tmp/gk_cfg_test_XXXXXX";
+    int fd = ::mkstemp(tmpl);
+    REQUIRE(fd >= 0);
+    ::close(fd);
+    std::string path = tmpl;
+    const std::string original = R"({
+  "ports": [
+    {
+      "name": "svc",
+      "listen": ":3000",
+      "command": "./a",
+      "refresh_seconds": 5
+    }
+  ]
+})";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << original;
+    }
+
+    // 写回新值
+    bool ok = updateRefreshSecondsInFile(path, ":3000", 15);
+    CHECK(ok);
+
+    // 1) 结果 JSON 合法, refresh_seconds 已更新
+    std::ifstream in(path);
+    std::stringstream ss; ss << in.rdbuf();
+    JsonValue v = parse_json(ss.str());
+    REQUIRE(v.is_obj());
+    auto* ports = v.get("ports");
+    REQUIRE(ports != nullptr);
+    REQUIRE(ports->is_arr());
+    auto* entry = ports->idx(0);
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->is_obj());
+    CHECK(entry->get("refresh_seconds")->as_num() == 15);
+
+    // 2) 原 JSON 其余内容保持完整 (name/listen/command 未丢)
+    CHECK(entry->get("name")->as_str() == "svc");
+    CHECK(entry->get("listen")->as_str() == ":3000");
+
+    // 3) 无 .tmp 残留
+    std::ifstream tmp(path + ".tmp");
+    CHECK(!tmp.good());
+
+    ::unlink(path.c_str());
 }
 
 

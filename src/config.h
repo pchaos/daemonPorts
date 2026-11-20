@@ -18,6 +18,12 @@ struct ProtocolConfig {
     std::string proxyTo;   // 后端地址，如 "127.0.0.1:8080"（hold_port=true 时必填）
     int         delayMs = 5000;
     bool        enabled = true;
+
+    // configsEqual 热加载对比用 (N10)
+    bool operator==(const ProtocolConfig& o) const {
+        return type == o.type && command == o.command && proxyTo == o.proxyTo
+            && delayMs == o.delayMs && enabled == o.enabled;
+    }
 };
 
 // TCP 监控配置

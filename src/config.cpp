@@ -5,6 +5,18 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+// N8 原子写: tmp+fsync+rename 依赖这些 POSIX API
+#ifndef _WIN32
+#include <unistd.h>   // unlink / fsync / close
+#include <fcntl.h>    // open / O_WRONLY / O_CLOEXEC
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#else
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>  // MoveFileExA
+#endif
 // 等待页专用的 refresh 调整能力令牌（CSPRNG 生成，仅内嵌在等待页中，
 // 只授权控制端口的 /__set_refresh 路由；不授权任何管理操作）。
 std::string g_refreshToken;
@@ -321,17 +333,63 @@ bool updateRefreshSecondsInFile(const std::string& path, const std::string& list
         text.insert(closeBrace, indent + "\"refresh_seconds\": " + newVal + "\n");
     }
 
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        std::cerr << "错误: 无法写入配置文件 " << path << std::endl;
+    // ── 原子写: 临时文件 + fsync + rename, 避免崩溃/断电截断原配置 (N8) ──
+#ifndef _WIN32
+    const std::string tmpPath = path + ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            std::cerr << "错误: 无法写入临时配置文件 " << tmpPath << std::endl;
+            return false;
+        }
+        out << text;
+        out.flush();
+        if (!out.good()) {
+            std::cerr << "错误: 写入临时配置文件 " << tmpPath << " 失败" << std::endl;
+            out.close();
+            ::unlink(tmpPath.c_str());
+            return false;
+        }
+        out.close();
+    }
+    // fsync 落盘后再 rename 原子替换
+    int fd = ::open(tmpPath.c_str(), O_WRONLY | O_CLOEXEC);
+    if (fd < 0 || ::fsync(fd) != 0) {
+        std::cerr << "错误: fsync 临时配置文件 " << tmpPath << " 失败" << std::endl;
+        if (fd >= 0) ::close(fd);
+        ::unlink(tmpPath.c_str());
         return false;
     }
-    out << text;
-    out.close();
-    if (!out.good()) {
-        std::cerr << "错误: 写入配置文件 " << path << " 失败" << std::endl;
+    ::close(fd);
+    if (::rename(tmpPath.c_str(), path.c_str()) != 0) {
+        std::cerr << "错误: 替换配置文件 " << path << " 失败" << std::endl;
+        ::unlink(tmpPath.c_str());
         return false;
     }
+#else
+    // Windows: MoveFileExA 原子替换
+    const std::string tmpPath = path + ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            std::cerr << "错误: 无法写入临时配置文件 " << tmpPath << std::endl;
+            return false;
+        }
+        out << text;
+        out.close();
+        if (!out.good()) {
+            std::cerr << "错误: 写入临时配置文件 " << tmpPath << " 失败" << std::endl;
+            ::remove(tmpPath.c_str());
+            return false;
+        }
+    }
+    if (!MoveFileExA(tmpPath.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::cerr << "错误: 替换配置文件 " << path << " 失败" << std::endl;
+        ::remove(tmpPath.c_str());
+        return false;
+    }
+#endif
     std::cout << "已更新 " << path << ": listen=" << listenAddr
               << " refresh_seconds=" << seconds << std::endl;
     return true;
