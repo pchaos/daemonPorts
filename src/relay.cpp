@@ -50,6 +50,8 @@ static std::string controlListenPort(const std::string& listen) {
 
 
 bool PortRelay::isPortBound(uint16_t port) {
+    // 先测 IPv4, 再测 IPv6: IPv6-only 监听 (如 "[::]:8080") 在旧实现下
+    // 只查 IPv4 会漏判为"未被占用" (N12)。
     PlatformHandle fd = platform::socket_ai(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return true;
     int opt = 1;
@@ -59,6 +61,17 @@ bool PortRelay::isPortBound(uint16_t port) {
     sa.sin_addr.s_addr = htonl(INADDR_ANY);
     sa.sin_port = htons(port);
     int rc = platform::bind_fd(fd, &sa, sizeof(sa));
+    platform::close_fd(fd);
+    if (rc < 0 && platform::last_error_is(PLATFORM_EADDRINUSE)) return true;
+
+    fd = platform::socket_ai(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    platform::set_sockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in6 sa6{};
+    sa6.sin6_family = AF_INET6;
+    sa6.sin6_addr = in6addr_any;
+    sa6.sin6_port = htons(port);
+    rc = platform::bind_fd(fd, &sa6, sizeof(sa6));
     platform::close_fd(fd);
     return (rc < 0 && platform::last_error_is(PLATFORM_EADDRINUSE));
 }
@@ -835,6 +848,31 @@ static void pipeRelay(int src, int dst, std::atomic<bool>& done) {
     done.store(true);
 }
 
+// 双向隧道, 跑在独立线程 (N2): 不访问 this, 仅操作两个 fd 与日志名拷贝,
+// 使 accept 循环不再被长连接阻塞 (单长连接串行阻塞整端口 accept 的 DoS 面)。
+// 线程 detach, 不 join: relay stop/析构后线程仍只碰自己的 fd, 进程退出由 OS 回收。
+static void runTunnelPair(int a, int b, const std::string& logName, const std::string& label) {
+    if (!logName.empty())
+        std::cout << "  [" << logName << "] 隧道已建立: " << label << std::endl;
+    std::atomic<bool> done1{false}, done2{false};
+    std::thread t1(pipeRelay, a, b, std::ref(done1));
+    std::thread t2(pipeRelay, b, a, std::ref(done2));
+
+    // 等待任一方向结束
+    while (!done1 && !done2)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // 强制关闭两端，回收线程
+    platform::shutdown_fd(a, SHUT_RDWR);
+    platform::shutdown_fd(b, SHUT_RDWR);
+    if (t1.joinable()) t1.join();
+    if (t2.joinable()) t2.join();
+    platform::close_fd(a);
+    platform::close_fd(b);
+    if (!logName.empty())
+        std::cout << "  [" << logName << "] 隧道已关闭: " << label << std::endl;
+}
+
 int PortRelay::connectToBackend(const std::string& addr) {
     sockaddr_storage sa;
     sa_family_t fam = parseSockaddr(addr, sa);
@@ -854,28 +892,8 @@ void PortRelay::proxyConnection(int clientFd, const std::string& proxyTo) {
         platform::close_fd(clientFd);
         return;
     }
-
-    std::cout << "  [" << name_ << "] 隧道已建立: 客户端 ↔ " << proxyTo << std::endl;
-
-    // 双向全双工隧道，两个线程各负责一个方向
-    std::atomic<bool> done1{false}, done2{false};
-    std::thread t1(pipeRelay, clientFd, backendFd, std::ref(done1));
-    std::thread t2(pipeRelay, backendFd, clientFd, std::ref(done2));
-
-    // 等待任一方向结束
-    while (!done1 && !done2) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-
-    // 强制关闭两端，回收线程
-    platform::shutdown_fd(clientFd, SHUT_RDWR);
-    platform::shutdown_fd(backendFd, SHUT_RDWR);
-    if (t1.joinable()) t1.join();
-    if (t2.joinable()) t2.join();
-    platform::close_fd(clientFd);
-    platform::close_fd(backendFd);
-
-    std::cout << "  [" << name_ << "] 隧道已关闭" << std::endl;
+    // 隧道在独立线程运行, 本函数立即返回 → accept 循环不被阻塞 (N2)
+    std::thread(runTunnelPair, clientFd, backendFd, name_, proxyTo).detach();
 }
 
 // ── hold_port=true：按协议启动后端 ──
@@ -1156,20 +1174,9 @@ void PortRelay::socks5ListenLoop() {
                 platform::write_fd(fd, resp, sizeof(resp));
                 std::cout << "  [" << name_ << "] SOCKS5 隧道建立: 客户端 ↔ " << targetStr << std::endl;
 
-                // ── 双向隧道 ──
-                std::atomic<bool> done1{false}, done2{false};
-                std::thread t1(pipeRelay, fd, targetFd, std::ref(done1));
-                std::thread t2(pipeRelay, targetFd, fd, std::ref(done2));
-
-                while (!done1 && !done2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-                platform::shutdown_fd(fd, SHUT_RDWR);
-                platform::shutdown_fd(targetFd, SHUT_RDWR);
-                if (t1.joinable()) t1.join();
-                if (t2.joinable()) t2.join();
-                platform::close_fd(fd);
-                platform::close_fd(targetFd);
-                std::cout << "  [" << name_ << "] SOCKS5 隧道关闭: " << targetStr << std::endl;
+                // ── 双向隧道 (独立线程, accept 循环不被阻塞 N2) ──
+                std::string tlabel = "客户端 ↔ " + targetStr;
+                std::thread(runTunnelPair, fd, targetFd, name_, tlabel).detach();
 
             } else if (proto == "http" && !httpTarget_.empty()) {
                 // HTTP → 转发到 httpTarget_

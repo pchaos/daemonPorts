@@ -15,11 +15,6 @@ class ControlServer {
     ControlConfig config_;
     std::atomic<bool> stop_{false};
     PlatformThread thread_{};
-    struct PinCooldown {
-        std::mutex mtx;
-        std::map<std::string, long long> lockedUntil; // epoch-ms when cooldown expires, per IP
-    };
-    PinCooldown pinCooldown_;
     // Track streaming threads so they stop on shutdown
     std::mutex streamThreadsMtx_;
     std::vector<PlatformThread> streamThreads_;

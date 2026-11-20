@@ -81,16 +81,19 @@ static int gcd(int a, int b) {
 static void monitorLoop() {
     // 计算所有端口间隔的最大公约数作为睡眠间隔
     int interval = 0;
-    for (auto& r : g_relays) {
-        if (r->monitorEnabled()) {
-            interval = (interval == 0) ? r->monitorIntervalSec() : gcd(interval, r->monitorIntervalSec());
+    {
+        std::lock_guard<std::mutex> lock(g_relaysMutex);
+        for (auto& r : g_relays) {
+            if (r->monitorEnabled()) {
+                interval = (interval == 0) ? r->monitorIntervalSec() : gcd(interval, r->monitorIntervalSec());
+            }
         }
-    }
 
-    std::cout << "TCP 连接监控已启动，各端口独立轮询间隔：" << std::endl;
-    for (auto& r : g_relays) {
-        if (r->monitorEnabled()) {
-            std::cout << "  [" << r->name() << "] " << r->monitorIntervalSec() << " 秒" << " (tick=" << interval << "s)" << std::endl;
+        std::cout << "TCP 连接监控已启动，各端口独立轮询间隔：" << std::endl;
+        for (auto& r : g_relays) {
+            if (r->monitorEnabled()) {
+                std::cout << "  [" << r->name() << "] " << r->monitorIntervalSec() << " 秒" << " (tick=" << interval << "s)" << std::endl;
+            }
         }
     }
 
