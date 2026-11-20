@@ -42,8 +42,20 @@ class ControlServer {
                 return false;
             }
             timestamps.push_back(now);
+            // 定期清理整体过期的条目, 防无界 map 增长 (M4):
+            // 每次 allow 命中清洗一次, 摊薄成本, 长期运行远 IP 条目不再累积。
+            if (++cleanupCounter_ >= 256) {
+                cleanupCounter_ = 0;
+                for (auto m = window.begin(); m != window.end(); ) {
+                    if (m->second.empty() || (now - m->second.back()) >= windowMs)
+                        m = window.erase(m);
+                    else
+                        ++m;
+                }
+            }
             return true;
         }
+        int cleanupCounter_ = 0;
     };
     RateLimiter rateLimiter_;
 public:

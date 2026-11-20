@@ -388,10 +388,11 @@ int main(int argc, char* argv[]) {
 
     // Determine config path and parse CLI control port option
     std::string configPath;
+    std::string cliControlPort;   // --control-port 显式值 (H2 勘误: 此前被配置文件静默覆盖)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--control-port") == 0) {
             if (i + 1 < argc) {
-                g_controlConfig.listen = argv[++i];
+                cliControlPort = argv[++i];
             }
             continue;
         }
@@ -404,6 +405,7 @@ int main(int argc, char* argv[]) {
         printHelp();
         return 1;
     }
+    const bool cliControlSet = !cliControlPort.empty();
 
     // "-" 表示从 stdin 读取配置
     std::vector<PortConfig> cfgs;
@@ -424,6 +426,8 @@ int main(int argc, char* argv[]) {
     }
     // 启动时解析一次 system_monitor 段（与 control 段语义一致，热加载不触碰）
     parseSystemMonitorConfig(rawConfig);
+    // CLI --control-port 显式指定时覆盖配置文件值 (H2 勘误)
+    if (cliControlSet) g_controlConfig.listen = cliControlPort;
     if (cfgs.empty()) {
         std::cerr << "错误: 没有有效的端口配置" << std::endl;
         return 1;
