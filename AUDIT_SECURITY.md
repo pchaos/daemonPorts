@@ -224,3 +224,41 @@
 | 🟢 LOW | N10 | main.cpp configsEqual | 未比较 `protocols`/`auth`/`monitor.ipv6` → 热加载改这些字段不生效 (需重启) |
 | 🟢 LOW | N11 | json.cpp | 递归解析无深度上限, 恶意深嵌套 /config body 可栈溢出 (需 token) |
 | 🟢 LOW | N12 | relay.cpp detectProtocol | IPv6-only 监听端口上 `isPortBound` 只查 IPv4 族 → 外部占用检测失效 for v6 |
+
+---
+
+## 2026-11-20 复查: 修复状态 (v1.1.18)
+
+本轮更新的修复 (commit `5b9d942d` `e12632db` `ee33c98b` `7349b36` `4ad824e`), 全部经单测 126/126 + 端到端实测:
+
+| ID | 状态 | 说明 |
+|----|------|------|
+| N2 (HIGH) | ✅ 已修 | 隧道改独立线程 detach 运行 (`runTunnelPair`), accept 循环不再被长连接阻塞; 实测长连接挂起时新连接仍 200 |
+| N6 (MED) | ✅ 已修 | 删除从未使用的 `pinCooldown_` 死字段; CONFIG.md 同步修正"PIN 5 次冷却"错误描述 (代码无冷却, 依赖 rate limit) |
+| N7 (MED) | ⚠️ 维持 | `/__set_refresh` 能力令牌分离设计保留; 令牌 CSPRNG 生成不落盘, 但**内部路由 `tryHandleRefreshRequest` 无鉴权** (relay.cpp, 远端可达) → 已评估拒绝修复 |
+| N8 (MED) | ✅ 已修 | 配置写回改 tmp+fsync+rename 原子替换 (Windows MoveFileExA), 失败清理 .tmp |
+| N9 (MED) | ✅ 已修 | Content-Length try/catch (畸形→400)、拒绝负值、超 1MB 立即拒 (kMaxRequestBody) |
+| N10 (LOW) | ✅ 已修 | configsEqual 补 `monitor.ipv6`/`auth`/`protocols`; ProtocolConfig 加 operator== |
+| N11 (LOW) | ✅ 已修 | json.cpp 递归加 kMaxDepth=64 (栈溢出); 同时修复截断输入死循环 (B1, `{"a":` 原 CPU 100%) |
+| N12 (LOW) | ✅ 已修 | isPortBound 增 AF_INET6 检测; 实测 `[::1]` 监听时判定占用 |
+| M3 (MED) | ✅ 已修 | monitorLoop 启动段遍历 g_relays 加锁 (与循环体一致) |
+| M4 (MED) | ✅ 已修 | RateLimiter 每 256 次 allow 清洗一次过期条目, 无界 map 增长消除 |
+| M5 (LOW) | ✅ 已修 | 工作区残留 `port_group.o`/`test_arm64.o` 已删除 |
+
+### 2026-11-16 审计新发现 (v1.1.17, commit 5b9d942d)
+| 等级 | ID | 位置 | 问题 |
+|------|----|------|------|
+| 🔴 CRITICAL | F1 | relay_posix.cpp runShellCommand | ~~`/run` 同步命令输出 >64KB: 达上限 break 后 waitpid 阻塞在仍持有管道写端、持续产出的 sh 上 → 控制线程永久卡死, 4 个并发请求瘫痪全部管理面~~ **已修复**: 达上限后持续读并丢弃 (有限输出正常结束, 无限输出由超时兜底) + poll 监听 POLLHUP + setpgid 组杀; 实测 200KB 输出 38ms 返回 |
+| 🟠 HIGH | H3 | relay_posix.cpp runShellCommand | ~~超时 `kill(pid)` 只杀 sh, 孙进程 (无 setpgid) 幸存成孤儿~~ **已修复**: 独立进程组, 超时/EOF 后 `kill(-pid)` 连组清; 实测 `sleep 30` 无残留 |
+| 🟡 MED | B1 | json.cpp | ~~解析截断输入 (`{"a":`) 时 skipws 越界推进 + parse_obj 内嵌 while(true) 永不退出 → CPU 100% DoS~~ **已修复**: 各解析函数补 p 边界检查; 同步加深度上限 (N11) |
+| 🟢 LOW | CLI | main.cpp | ~~`--control-port` 被 parseConfig 的 control.listen 静默覆盖, CLI 值实际不生效~~ **已修复**: 解析后重新应用 CLI 值; 实测覆盖生效 |
+| 🟢 LOW | dead config | gatekeeper-config.json | 顶层 `commands` 数组从未被 parseConfig 读取 (只读 control.commands) → `/run {"name":"disk-usage"}` 返回 unknown; **已修复**: 并入 control.commands |
+| 🟢 LOW | auth token | gatekeeper-config.json | 固定 token+PIN 入库 (f7fb383), 常驻进程不重载 control 段 → 运行期换 token 需重启; **已修复**: 样本移除固定密钥 (空 token 由启动时 CSPRNG 生成), 部署模板另需自行轮换 |
+
+### 剩余未修 (已知取舍)
+| ID | 级别 | 说明 |
+|----|------|------|
+| N7 内部路由 | MED | `tryHandleRefreshRequest` 无鉴权改写 refresh_seconds (限 1..3600), 评估后决定不修 |
+| H4 popen | LOW | relay_linux.cpp `ss \| grep` popen, 端口来自受信配置, 注入面小 |
+| M1 (stoi) | ⚠️ | 仅 Content-Length 已 catch; 其余 stoi 调用点均已审慎 (配置解析非用户可控) |
+| C1 token 泄露风险 | — | 若 token 泄露, `/run` preset 无需 PIN 即可执行; 属部署责任 (勿将 token 写进公开仓库) |
